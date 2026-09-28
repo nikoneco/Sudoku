@@ -223,16 +223,48 @@ test("MEMO with the same digit leaves a one-candidate note without re-confirming
   assert.deepEqual(converted.lastAutoFilled, []);
 });
 
-test("MEMO conversion keeps the existing legal-candidate filter for an illegal selected digit", () => {
+test("MEMO conversion shows both digits even when the selected digit is illegal", () => {
   let game = createGame(puzzle({ 1: 9 }));
   game = transact(game, { type: "set", cell: 0, value: 1 });
   const converted = transact(game, { type: "toggleCandidate", cell: 0, value: 9 });
 
   assert.equal(converted.currentBoard[0], 0);
   assert.equal(converted.manualIncludedCandidates[0], maskOf(1, 9));
-  assert.deepEqual(getDisplayedCandidates(converted, 0, true), [1]);
-  assert.deepEqual(getDisplayedCandidates(converted, 0, false), [1]);
+  assert.deepEqual(getDisplayedCandidates(converted, 0, true), [1, 9]);
+  assert.deepEqual(getDisplayedCandidates(converted, 0, false), [1, 9]);
+  assert.deepEqual(getEffectiveCandidates(converted, 0), [1]);
   assert.deepEqual(converted.lastAutoFilled, []);
+});
+
+test("illegal notes persist and toggle without affecting legal candidates or auto-filling", () => {
+  for (const autoCandidates of [true, false]) {
+    let game = blankGame();
+    game.currentBoard = solvedGrid();
+    game.currentBoard[0] = 0; // Only 1 is legal, but a manual 9 must remain a note.
+    const added = transact(game, { type: 'toggleCandidate', cell: 0, value: 9, autoCandidates });
+    assert.equal(added.currentBoard[0], 0);
+    assert.deepEqual(getEffectiveCandidates(added, 0), [1]);
+    assert.ok(getDisplayedCandidates(added, 0, autoCandidates).includes(9));
+    assert.deepEqual(added.lastAutoFilled, []);
+    assert.deepEqual(undo(added).manualIncludedCandidates, game.manualIncludedCandidates);
+    assert.deepEqual(redo(undo(added)).manualIncludedCandidates, added.manualIncludedCandidates);
+    const removed = transact(added, { type: 'toggleCandidate', cell: 0, value: 9, autoCandidates });
+    assert.ok(!getDisplayedCandidates(removed, 0, autoCandidates).includes(9));
+    assert.equal(removed.currentBoard[0], 0);
+    const cleared = transact(added, { type: 'clearNotes', cell: 0 });
+    assert.deepEqual(getDisplayedCandidates(cleared, 0, true), []);
+    assert.deepEqual(getDisplayedCandidates(cleared, 0, false), []);
+  }
+});
+
+test("a written note stays visible if a later entry makes it illegal, and filled cells hide notes", () => {
+  let game = include(blankGame(), 0, [9]);
+  game = transact(game, { type: 'set', cell: 1, value: 9 });
+  assert.deepEqual(getDisplayedCandidates(game, 0, false), [9]);
+  assert.ok(!getEffectiveCandidates(game, 0).includes(9));
+  game = transact(game, { type: 'set', cell: 0, value: 1 });
+  assert.deepEqual(getDisplayedCandidates(game, 0, true), []);
+  assert.deepEqual(getDisplayedCandidates(game, 0, false), []);
 });
 
 test("a hidden single does not auto-fill", () => {

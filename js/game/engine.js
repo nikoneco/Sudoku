@@ -104,8 +104,8 @@ export function getEffectiveCandidates(game, cell) {
 
 /**
  * Return the candidates visible in the selected display mode.
- * Automatic display uses effective candidates; manual display uses explicitly
- * included legal candidates, with exclusions taking precedence in both modes.
+ * Manual notes remain visible even when illegal. Automatic candidates are still
+ * legal only; exclusions take precedence in both display modes.
  */
 export function getDisplayedCandidates(game, cell, autoCandidates = true) {
   assertGame(game);
@@ -113,11 +113,12 @@ export function getDisplayedCandidates(game, cell, autoCandidates = true) {
   if (typeof autoCandidates !== "boolean") {
     throw new TypeError("autoCandidates must be a boolean");
   }
+  if (game.currentBoard[cell] !== 0) return [];
   const legal = legalMaskForBoard(game.currentBoard, cell);
   const notExcluded = ~game.manualExcludedCandidates[cell];
   const visible = autoCandidates
-    ? legal & notExcluded
-    : legal & game.manualIncludedCandidates[cell] & notExcluded;
+    ? (legal | game.manualIncludedCandidates[cell]) & notExcluded
+    : game.manualIncludedCandidates[cell] & notExcluded;
   return digitsFromMask(visible);
 }
 
@@ -290,6 +291,7 @@ export function transact(game, action) {
 
   if (action.type === "set") {
     if (draft.currentBoard[cell] === action.value) return game;
+    if (draft.currentBoard.filter(value => value === action.value).length >= 9) return game;
     draft.currentBoard[cell] = action.value;
     draft.sources[cell] = "manual";
     return finishTransaction(game, draft, true);
@@ -310,25 +312,19 @@ export function transact(game, action) {
   }
 
   const digitBit = bitFor(action.value);
-  if (!hasBit(legalMaskForBoard(draft.currentBoard, cell), action.value)) return game;
-  if (action.autoCandidates ?? true) {
-    if (hasBit(draft.manualExcludedCandidates[cell], action.value)) {
-      draft.manualExcludedCandidates[cell] &= ~digitBit;
-    } else {
-      draft.manualExcludedCandidates[cell] |= digitBit;
-    }
+  const legal = legalMaskForBoard(draft.currentBoard, cell);
+  const effectiveBefore = legal & ~draft.manualExcludedCandidates[cell];
+  const visible = ((action.autoCandidates ?? true) ? legal | draft.manualIncludedCandidates[cell] : draft.manualIncludedCandidates[cell])
+    & ~draft.manualExcludedCandidates[cell];
+  if (visible & digitBit) {
+    draft.manualIncludedCandidates[cell] &= ~digitBit;
+    draft.manualExcludedCandidates[cell] |= digitBit;
   } else {
-    const isDisplayed = hasBit(draft.manualIncludedCandidates[cell], action.value)
-      && !hasBit(draft.manualExcludedCandidates[cell], action.value);
-    if (isDisplayed) {
-      draft.manualIncludedCandidates[cell] &= ~digitBit;
-      draft.manualExcludedCandidates[cell] |= digitBit;
-    } else {
-      draft.manualIncludedCandidates[cell] |= digitBit;
-      draft.manualExcludedCandidates[cell] &= ~digitBit;
-    }
+    draft.manualIncludedCandidates[cell] |= digitBit;
+    draft.manualExcludedCandidates[cell] &= ~digitBit;
   }
-  return finishTransaction(game, draft, true);
+  const effectiveAfter = legal & ~draft.manualExcludedCandidates[cell];
+  return finishTransaction(game, draft, effectiveBefore !== effectiveAfter);
 }
 
 /** Restore the previous editable snapshot without changing timer fields. */

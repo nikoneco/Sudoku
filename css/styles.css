@@ -593,17 +593,17 @@ button:focus-visible {
   min-height: 41px;
   height: clamp(41px, 6svh, 50px);
   padding: 0;
-  border: 1px solid transparent;
+  border: 1px solid var(--teal-mid);
   border-radius: 5px;
-  background: var(--pad-bg);
-  color: var(--ink);
+  background: var(--teal-soft);
+  color: var(--teal);
   font-size: clamp(20px, 6vw, 27px);
   font-weight: 560;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   transition: background-color .12s ease, color .12s ease;
 }
-.number-key:hover { background: var(--pad-hover); }
+.number-key:hover { background: var(--teal-mid); }
 .number-key:active { background: var(--teal-mid); }
 .game-screen.memo-mode .number-key { border-color: var(--memo-pad-border); background: var(--memo-pad-bg); color: var(--memo-pad-ink); }
 .game-screen.memo-mode .number-key:hover { background: var(--memo-pad-hover); }

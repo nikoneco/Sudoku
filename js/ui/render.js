@@ -107,13 +107,13 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
     const accessibleFlags = [isGiven ? '固定' : '入力可能', conflictSet.has(index) ? '衝突' : ''].filter(Boolean).join('、');
     return `<button class="${classes.join(' ')}" role="gridcell" aria-selected="${index === selected}" aria-label="${row + 1}行${col + 1}列、${accessibleValue}${accessibleFlags ? `、${accessibleFlags}` : ''}" data-cell="${index}">${display}</button>`;
   }).join('');
-  const pad = keypadState(game, selected, state.inputMode);
+  const pad = keypadState(game, selected, state.inputMode, state.settings.autoCandidates);
   const padByDigit = new Map(pad.map((key) => [key.digit, key]));
   const numberKey = (digit) => {
     const key = padByDigit.get(digit) || { muted: false, disabled: false };
     const classes = ['number-key'];
     if (key.muted) classes.push('is-muted');
-    return `<button class="${classes.join(' ')}" data-action="digit" data-digit="${digit}" aria-label="${digit}"${key.disabled ? ' disabled title="このマスには入力できません"' : ''}>${digit}</button>`;
+    return `<button class="${classes.join(' ')}" data-action="digit" data-digit="${digit}" aria-label="${digit}"${state.inputMode === 'memo' ? ` aria-pressed="${!key.muted}"` : ''}${key.disabled ? ' disabled title="この数字は入力できません"' : ''}>${digit}</button>`;
   };
   const digits = [1, 3, 5, 7, 9].map(numberKey).join('');
   const evens = [2, 4, 6, 8].map(numberKey).join('');

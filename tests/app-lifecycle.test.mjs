@@ -77,11 +77,11 @@ test('theme switching updates the whole page and saves without changing the game
   assert.equal(writes.at(-1).currentGame, null);
 });
 
-test('keyboard input cannot bypass an unavailable memo key', async () => {
+test('keyboard input cannot bypass a number key already used nine times', async () => {
   const { context, events } = await app();
   context.getKeypadState = () => [{ digit: 9, disabled: true }];
-  context.transact = () => { throw new Error('Unavailable memo must not transact'); };
-  vm.runInContext(`state.view = 'game'; state.currentGame = { elapsedTime: 0 }; state.inputMode = 'memo';`, context);
+  context.transact = () => { throw new Error('Unavailable number must not transact'); };
+  vm.runInContext(`state.view = 'game'; state.currentGame = { elapsedTime: 0 }; state.inputMode = 'number';`, context);
   events['root:keydown']({ key: '9', preventDefault() {} });
   assert.equal(vm.runInContext('state.currentGame.elapsedTime', context), 0);
 });

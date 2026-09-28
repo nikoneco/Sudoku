@@ -252,7 +252,7 @@ function enterDigit(digit) {
   const game = state.currentGame;
   const cell = state.selectedCell;
   if (!game || isComplete(game) || !Number.isInteger(cell)) return;
-  if (getKeypadState(game, cell, state.inputMode).find(key => key.digit === digit)?.disabled) return;
+  if (getKeypadState(game, cell, state.inputMode, state.settings.autoCandidates).find(key => key.digit === digit)?.disabled) return;
   const previous = game;
   const next = state.inputMode === 'memo'
     ? transact(game, { type: 'toggleCandidate', cell, value: digit, autoCandidates: state.settings.autoCandidates })
