@@ -1,1 +1,1 @@
-{"name":"sudoku","version":"1.1.0","private":true,"type":"module","scripts":{"test":"node --test tests/*.test.mjs","serve":"node tools/serve.mjs","generate":"node tools/generate-puzzles.mjs","validate":"node tools/validate-puzzles.mjs"},"devDependencies":{"fake-indexeddb":"^6.2.5"}}
+{"name":"sudoku","version":"1.2.0","private":true,"type":"module","scripts":{"test":"node --test tests/*.test.mjs","serve":"node tools/serve.mjs","generate":"node tools/generate-puzzles.mjs","validate":"node tools/validate-puzzles.mjs"},"devDependencies":{"fake-indexeddb":"^6.2.5"}}

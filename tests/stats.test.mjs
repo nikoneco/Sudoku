@@ -1,12 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyStats, mergeStats, normalizeStats, recordClear } from '../js/data/stats.js';
+import { awardExperience, emptyStats, mergeStats, normalizeStats, recordClear } from '../js/data/stats.js';
 
 const puzzles = [
   { puzzleId: 'old-a', difficulty: '初級' },
   { puzzleId: 'old-b', difficulty: '中級' },
   { puzzleId: 'same-id', difficulty: '上級' },
 ];
+const eventA = '018f47d2-a590-7cc2-9b60-bc5472b7d824';
+const eventB = '018f47d2-a590-7cc2-9b60-bc5472b7d825';
 
 function record(puzzleId, difficulty, elapsedTime) {
   return recordClear(emptyStats(), { puzzleId, difficulty, elapsedTime });
@@ -19,6 +21,7 @@ test('empty stats expose additive records and legacy-best maps', () => {
     totalClears: 0,
     records: {},
     legacyBest: {},
+    experienceEvents: {},
   });
 });
 
@@ -154,4 +157,48 @@ test('aggregate counts survive catalog gaps and duplicate historical IDs are sti
   assert.equal(merged.totalClears, 7);
   assert.equal(merged.byDifficulty['上級'].clears, 6);
   assert.equal(merged.byDifficulty['上級'].bestTime, 300);
+});
+
+test('XP is awarded once per valid completion event, including distinct replays, without backfilling old clears', () => {
+  const oldStats = normalizeStats({
+    clearedIds: ['old-a'],
+    byDifficulty: { '初級': { clears: 1, bestTime: 42 } },
+    totalClears: 1,
+  }, puzzles);
+  assert.deepEqual(oldStats.experienceEvents, {});
+
+  const once = awardExperience(oldStats, eventA, '初級');
+  const retried = awardExperience(once, eventA, '初級');
+  const replayed = awardExperience(retried, eventB, '初級');
+  assert.deepEqual(once.experienceEvents, { [eventA]: { difficulty: '初級' } });
+  assert.deepEqual(retried.experienceEvents, once.experienceEvents);
+  assert.deepEqual(replayed.experienceEvents, {
+    [eventA]: { difficulty: '初級' },
+    [eventB]: { difficulty: '初級' },
+  });
+  assert.equal(oldStats.totalClears, 1);
+});
+
+test('XP merge unions immutable event IDs and resolves malformed or conflicting event data safely', () => {
+  const left = normalizeStats({ experienceEvents: {
+    [eventA]: { difficulty: '上級' },
+    [eventB]: { difficulty: '中級' },
+    '018f47d2-a590-7cc2-9b60-bc5472b7d826': { difficulty: '初級', extra: true },
+    '018F47D2-A590-7CC2-9B60-BC5472B7D827': { difficulty: '初級' },
+    'bad-id': { difficulty: '初級' },
+  } });
+  const right = normalizeStats({ experienceEvents: {
+    [eventA]: { difficulty: '初級' },
+    '018f47d2-a590-7cc2-9b60-bc5472b7d826': { difficulty: '初級' },
+  } });
+
+  const merged = mergeStats(left, right);
+  assert.deepEqual(merged.experienceEvents, {
+    [eventA]: { difficulty: '初級' },
+    [eventB]: { difficulty: '中級' },
+    '018f47d2-a590-7cc2-9b60-bc5472b7d826': { difficulty: '初級' },
+  });
+  assert.deepEqual(mergeStats(right, left).experienceEvents, merged.experienceEvents);
+  assert.deepEqual(mergeStats(merged, merged).experienceEvents, merged.experienceEvents);
+  assert.equal(awardExperience(left, eventA, '初級').experienceEvents[eventA].difficulty, '初級');
 });

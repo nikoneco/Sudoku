@@ -1,5 +1,7 @@
 import { icon } from './icons.js';
 import { THEMES } from '../config.js';
+import { getExperience } from '../data/experience.js';
+import { getLevelTitle } from '../data/level-titles.js';
 
 const html = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -47,6 +49,7 @@ function pageHeader(title, backAction = 'back', right = '') {
 function homeView(state, difficulties, complete) {
   const current = state.currentGame;
   const canResume = current && !complete(current);
+  const experience = state.account ? getExperience(state.stats) : null;
   const difficultyRows = difficulties.map((difficulty, index) => {
     const dots = Array.from({ length: difficulties.length }, (_, dot) => `<i${dot <= index ? ' class="is-filled"' : ''}></i>`).join('');
     return `<button class="level-row" data-action="new-game" data-difficulty="${html(difficulty)}"${state.busy || !state.storageReady || state.sessionBlocked ? ' disabled' : ''}>
@@ -58,6 +61,7 @@ function homeView(state, difficulties, complete) {
   return `<main class="screen home-screen">
     ${notices(state)}
     <header class="home-header"><h1 class="brand">SUDOKU</h1></header>
+    ${experience ? `<p class="home-level" aria-label="Lv${experience.level} ${html(getLevelTitle(experience.level))}"><span>Lv${experience.level}</span><span>${html(getLevelTitle(experience.level))}</span></p>` : ''}
     <div class="home-content">
       ${canResume ? `<button class="resume-card" data-action="resume">
         <span class="resume-title">つづきから</span>
@@ -130,7 +134,7 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
     <div class="game-meta"><span class="game-difficulty">${html(difficulty)}</span><time class="game-timer" aria-label="経過時間">${formatDuration(elapsed)}</time></div>
     <div class="board-stage">
       <section class="board" role="grid" aria-label="数独盤面">${cells}</section>
-      ${completed && state.completionOpen ? completionOverlay(game) : ''}
+      ${completed && state.completionOpen ? completionOverlay(game, state.completionExperience) : ''}
     </div>
     <section class="entry-panel" aria-label="入力"${completed ? ' inert aria-disabled="true"' : ''}>
       <div class="entry-head">
@@ -213,11 +217,23 @@ function statsView(state, difficulties) {
   </main>`;
 }
 
-function completionOverlay(game) {
+function completionExperienceView(experience) {
+  if (!experience || !Number.isFinite(Number(experience.level)) || !Number.isFinite(Number(experience.progress))) return '';
+  const level = Math.max(1, Math.floor(Number(experience.level)));
+  const progress = Math.max(0, Math.min(100, Number(experience.progress)));
+  const title = getLevelTitle(level);
+  return `<div class="clear-experience" data-experience-overlay>
+    <div class="experience-track" data-experience-track role="progressbar" aria-label="次のレベルまで" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(progress)}"><span class="experience-fill" data-experience-fill style="width:${progress}%"></span></div>
+    <div class="experience-label"><strong data-experience-level>Lv${level}</strong><span data-experience-title>${html(title)}</span></div>
+  </div>`;
+}
+
+function completionOverlay(game, experience) {
   return `<section class="clear-overlay" role="status" aria-label="CLEAR">
     <button class="clear-close" data-action="dismiss-completion" aria-label="完成表示を閉じる">×</button>
     <strong class="clear-title">CLEAR</strong>
     <p class="clear-result"><span>${html(game.difficulty)}</span><time>${formatDuration(game.elapsedTime)}</time></p>
+    ${completionExperienceView(experience)}
     <button class="clear-home primary-action" data-action="home">ホームへ</button>
   </section>`;
 }

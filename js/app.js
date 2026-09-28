@@ -9,7 +9,9 @@ import {
   undo,
 } from './game/engine.js';
 import { DEFAULT_SETTINGS, emptyStats, loadApp, recordClear, saveApp } from './data/storage.js';
-import { mergeStats, normalizeStats } from './data/stats.js';
+import { awardExperience, mergeStats, normalizeStats } from './data/stats.js';
+import { getExperience } from './data/experience.js';
+import { createExperienceAnimator } from './ui/experience-animation.js';
 import {
   emptyScoreProfiles,
   getGuestScoreCount,
@@ -24,12 +26,15 @@ import { formatDuration, renderApp } from './ui/render.js';
 import { getKeypadState } from './ui/keypad.js';
 
 const root = document.querySelector('#app');
+const experienceAnimator = createExperienceAnimator();
 const state = {
   view: 'loading',
   returnView: 'home',
   statsReturnView: 'home',
   currentGame: null,
   completionOpen: false,
+  completionExperience: null,
+  experienceGain: null,
   stats: emptyStats(),
   scoreProfiles: emptyScoreProfiles(),
   guestScoreCount: 0,
@@ -102,7 +107,11 @@ function activateScoreProfile(key, displayName) {
   state.account = key === 'guest'
     ? null
     : { uid: key, displayName: displayName || previousName || '保存済みアカウント' };
-  if (previousKey !== key) scoreRevision += 1;
+  if (previousKey !== key) {
+    scoreRevision += 1;
+    state.experienceGain = null;
+    restoreCompletionExperience();
+  }
   refreshGuestScoreCount();
   void queueSave();
 }
@@ -173,6 +182,7 @@ function render() {
     pad: getKeypadState,
     elapsed: currentElapsed(),
   });
+  experienceAnimator.sync(root, state.view === 'game' && state.completionOpen ? state.experienceGain : null);
 }
 
 function currentElapsed() {
@@ -212,7 +222,7 @@ function startClock() {
   void queueSave();
 }
 
-function stopClock() {
+function stopClock(persist = true) {
   clearInterval(clockInterval);
   clockInterval = null;
   if (clockStartedAt === null || !state.currentGame) return;
@@ -223,12 +233,13 @@ function stopClock() {
   };
   clockStartedAt = null;
   clockBaseSeconds = elapsedTime;
-  void queueSave();
+  if (persist) void queueSave();
 }
 
 function changeView(view) {
   const oldView = state.view;
   if (oldView === 'game' && view !== 'game') stopClock();
+  if (view !== 'game') state.experienceGain = null;
   state.view = view;
   if (view === 'game' && oldView !== 'game') startClock();
   render();
@@ -267,6 +278,8 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
     if (isComplete(game)) throw new Error('Puzzle auto-completed at start');
     state.currentGame = game;
     state.completionOpen = false;
+    state.completionExperience = null;
+    state.experienceGain = null;
     state.selectedCell = chooseInitialCell(game);
     state.inputMode = 'number';
     state.returnView = 'home';
@@ -297,22 +310,42 @@ function announce(text) {
   render();
 }
 
-function registerCompletedGame(game) {
+function restoreCompletionExperience() {
+  const award = state.currentGame?.experienceAward;
+  const total = award?.totalExp;
+  state.completionExperience = award?.profileKey === state.scoreProfiles.activeKey
+    && Number.isSafeInteger(total) && total >= 0
+    ? { totalExp: total, level: Math.floor(total / 100) + 1, progress: total % 100 }
+    : null;
+}
+
+function registerCompletedGame(game, earnExperience = false) {
   if (game.scoreRecorded) return game;
   const completedGame = { ...game, scoreRecorded: true };
-  updateActiveStats(recordClear(state.stats, completedGame));
+  let nextStats = recordClear(state.stats, completedGame);
+  // Only a newly completed play earns XP. Loading an old completed board never does.
+  if (earnExperience) {
+    const eventId = crypto.randomUUID();
+    const from = getExperience(state.stats).totalExp;
+    nextStats = awardExperience(nextStats, eventId, game.difficulty);
+    const result = getExperience(nextStats);
+    completedGame.experienceAward = { eventId, profileKey: state.scoreProfiles.activeKey, totalExp: result.totalExp };
+    state.completionExperience = result;
+    state.experienceGain = { eventId, from, to: result.totalExp };
+  }
+  updateActiveStats(nextStats);
   return completedGame;
 }
 
 function finishIfComplete(game) {
   if (!isComplete(game)) return false;
   const elapsedTime = currentElapsed();
-  stopClock();
+  stopClock(false);
   state.currentGame = registerCompletedGame({
     ...state.currentGame,
     ...game,
     elapsedTime,
-  });
+  }, true);
   state.view = 'game';
   state.completionOpen = true;
   state.announce = '完成しました';
@@ -707,13 +740,14 @@ root.addEventListener('click', (event) => {
   else if (action === 'apply-update') activateUpdate();
   else if (action === 'retry-load') void initialize();
   else if (action === 'reload') window.location.reload();
-  else if (action === 'dismiss-completion') { state.completionOpen = false; render(); }
+  else if (action === 'dismiss-completion') { state.completionOpen = false; state.experienceGain = null; render(); }
 });
 
 root.addEventListener('keydown', (event) => {
   if (state.view !== 'game' || !state.currentGame) return;
   if (event.key === 'Escape' && state.completionOpen) {
     state.completionOpen = false;
+    state.experienceGain = null;
     render();
     return;
   }
@@ -855,6 +889,7 @@ async function initialize() {
     if (state.currentGame && isComplete(state.currentGame)) {
       const previousGame = state.currentGame;
       state.currentGame = registerCompletedGame(state.currentGame);
+      restoreCompletionExperience();
       initializationNeedsSave ||= previousGame !== state.currentGame;
       state.view = 'game';
       state.completionOpen = true;

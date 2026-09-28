@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFirebaseClient } from '../js/cloud/firebase-client.js';
-import { emptyStats, recordClear } from '../js/data/stats.js';
+import { awardExperience, emptyStats, recordClear } from '../js/data/stats.js';
 
 function makeSdk({ documents = {}, beforeTransaction = null, existingApps = [] } = {}) {
   const state = {
@@ -172,4 +172,66 @@ test('malformed cloud scores and legacy maps are ignored on read', async () => {
   assert.deepEqual(merged.records, { valid: { difficulty: '中級', elapsedTime: 70 } });
   assert.deepEqual(merged.legacyBest, {});
   assert.equal(state.writes.length, 0);
+});
+
+test('experience sync unions remote events and creates each local event once without mutable totals', async () => {
+  const localEvent = '018f47d2-a590-7cc2-9b60-bc5472b7d824';
+  const remoteEvent = '018f47d2-a590-7cc2-9b60-bc5472b7d825';
+  const { state, sdkLoader } = makeSdk({
+    documents: {
+      [`users/account-a/experience/${remoteEvent}`]: { difficulty: '上級' },
+    },
+  });
+  const client = await createFirebaseClient({ sdkLoader });
+  const local = awardExperience(emptyStats(), localEvent, '超上級');
+
+  const first = await client.syncStats('account-a', local);
+  const second = await client.syncStats('account-a', first);
+
+  assert.deepEqual(second.experienceEvents, {
+    [localEvent]: { difficulty: '超上級' },
+    [remoteEvent]: { difficulty: '上級' },
+  });
+  assert.deepEqual(state.writes, [
+    { path: `users/account-a/experience/${localEvent}`, data: { difficulty: '超上級' } },
+  ]);
+  assert.equal(Object.values(state.documents).some((value) => Object.hasOwn(value, 'totalExp')), false);
+});
+
+test('a concurrent immutable event wins its document while local conflict merging remains deterministic', async () => {
+  const eventId = '018f47d2-a590-7cc2-9b60-bc5472b7d826';
+  let raced = false;
+  const { state, sdkLoader } = makeSdk({
+    beforeTransaction(current, count) {
+      if (!raced && count === 1) {
+        raced = true;
+        current.documents.set(`users/account-a/experience/${eventId}`, { difficulty: '初級' });
+      }
+    },
+  });
+  const client = await createFirebaseClient({ sdkLoader });
+  const local = awardExperience(emptyStats(), eventId, '超上級');
+
+  const merged = await client.syncStats('account-a', local);
+
+  assert.deepEqual(merged.experienceEvents, { [eventId]: { difficulty: '初級' } });
+  assert.deepEqual(state.writes, []);
+});
+
+test('malformed cloud experience documents are ignored', async () => {
+  const validEvent = '018f47d2-a590-7cc2-9b60-bc5472b7d827';
+  const { state, sdkLoader } = makeSdk({
+    documents: {
+      [`users/account-a/experience/${validEvent}`]: { difficulty: '中級' },
+      'users/account-a/experience/not-a-uuid': { difficulty: '超上級' },
+      'users/account-a/experience/018f47d2-a590-7cc2-9b60-bc5472b7d828': { difficulty: '特級' },
+      'users/account-a/experience/018f47d2-a590-7cc2-9b60-bc5472b7d829': { difficulty: '初級', extra: true },
+    },
+  });
+  const client = await createFirebaseClient({ sdkLoader });
+
+  const merged = await client.syncStats('account-a', emptyStats());
+
+  assert.deepEqual(merged.experienceEvents, { [validEvent]: { difficulty: '中級' } });
+  assert.deepEqual(state.writes, []);
 });

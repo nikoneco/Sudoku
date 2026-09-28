@@ -31,6 +31,27 @@ try {
   }
   await assertSucceeds(sdk.setDoc(sdk.doc(a,'users/account-a/scores/legacy-001'), {difficulty:'中級',elapsedTime:null}));
   await assertFails(sdk.deleteDoc(score(a)));
+
+  const experienceId = '018f47d2-a590-7cc2-9b60-bc5472b7d824';
+  const experience = db => sdk.doc(db, `users/account-a/experience/${experienceId}`);
+  await assertSucceeds(sdk.setDoc(experience(a), { difficulty: '超上級' }));
+  assert.equal((await sdk.getDoc(experience(a))).data().difficulty, '超上級');
+  assert.equal((await assertSucceeds(sdk.getDocs(sdk.collection(a, 'users/account-a/experience')))).size, 1);
+  for (const db of [b, guest]) {
+    await assertFails(sdk.getDoc(experience(db)));
+    await assertFails(sdk.getDocs(sdk.collection(db, 'users/account-a/experience')));
+    await assertFails(sdk.setDoc(experience(db), { difficulty: '初級' }));
+  }
+  await assertFails(sdk.setDoc(experience(a), { difficulty: '初級' }));
+  await assertFails(sdk.deleteDoc(experience(a)));
+  for (const [eventId, data] of [
+    ['not-a-uuid', { difficulty: '初級' }],
+    ['018f47d2-a590-7cc2-9b60-bc5472b7d825', { difficulty: 'unknown' }],
+    ['018f47d2-a590-7cc2-9b60-bc5472b7d826', { difficulty: '初級', totalExp: 20 }],
+    ['018f47d2-a590-7cc2-9b60-bc5472b7d827', {}],
+  ]) {
+    await assertFails(sdk.setDoc(sdk.doc(a, `users/account-a/experience/${eventId}`), data));
+  }
   await assertFails(sdk.setDoc(sdk.doc(a,'users/account-a/preferences/app'), {theme:'night'}));
   await assertFails(sdk.setDoc(sdk.doc(a,'users/account-a/games/current'), {currentBoard:[]}));
   const meta = db => sdk.doc(db,'users/account-a/scoreMeta/legacy');
@@ -39,5 +60,5 @@ try {
   await assertFails(sdk.setDoc(meta(a),{bestTimes:{'初級':-1}}));
   await assertFails(sdk.setDoc(meta(a),{bestTimes:{unknown:123}}));
   await assertFails(sdk.setDoc(meta(a),{bestTimes:{'初級':123},settings:{}}));
-  console.log('PASS: owner-only scores; other-user/guest/board/settings/invalid writes denied; legacy best-times validated.');
+  console.log('PASS: owner-only scores and XP events; XP events are UUID-keyed and immutable; other-user/guest/board/settings/invalid writes denied; legacy best-times validated.');
 } finally { await env.cleanup(); }

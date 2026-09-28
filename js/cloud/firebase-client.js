@@ -1,6 +1,7 @@
 import { FIREBASE_CONFIG } from '../firebase-config.js';
 import { DIFFICULTIES } from '../config.js';
 import { emptyStats, mergeStats, normalizeStats } from '../data/stats.js';
+import { isExperienceEventId } from '../data/experience.js';
 
 const SDK_VERSION = '12.16.0';
 const MAX_ELAPSED_TIME = 31_536_000;
@@ -44,6 +45,12 @@ function validLegacyData(value) {
     && (value.bestTimes[difficulty] === null || isElapsedTime(value.bestTimes[difficulty])));
 }
 
+function validExperienceEvent(eventId, value) {
+  return isExperienceEventId(eventId)
+    && hasExactKeys(value, ['difficulty'])
+    && DIFFICULTIES.includes(value.difficulty);
+}
+
 function defineMapValue(target, key, value) {
   Object.defineProperty(target, key, {
     configurable: true,
@@ -53,7 +60,7 @@ function defineMapValue(target, key, value) {
   });
 }
 
-function scoreStatsFromSnapshot(scoreSnapshot, legacySnapshot) {
+function scoreStatsFromSnapshot(scoreSnapshot, legacySnapshot, experienceSnapshot) {
   const records = {};
   const clearedIds = [];
   for (const item of scoreSnapshot.docs) {
@@ -74,7 +81,15 @@ function scoreStatsFromSnapshot(scoreSnapshot, legacySnapshot) {
       }
     }
   }
-  return normalizeStats({ clearedIds, byDifficulty: {}, totalClears: 0, records, legacyBest });
+
+  const experienceEvents = {};
+  for (const item of experienceSnapshot.docs) {
+    const eventId = item.id;
+    const value = item.data();
+    if (!validExperienceEvent(eventId, value)) continue;
+    defineMapValue(experienceEvents, eventId, { difficulty: value.difficulty });
+  }
+  return normalizeStats({ clearedIds, byDifficulty: {}, totalClears: 0, records, legacyBest, experienceEvents });
 }
 
 function preferredScore(left, right) {
@@ -124,14 +139,15 @@ export async function createFirebaseClient({ sdkLoader = loadFirebaseSdk } = {})
     if (!uid || auth.currentUser?.uid !== uid) throw new Error('auth-changed');
   }
 
-  async function readStats(uid, scoresRef, legacyRef) {
+  async function readStats(uid, scoresRef, legacyRef, experienceRef) {
     assertCurrentUser(uid);
-    const [scoreSnapshot, legacySnapshot] = await Promise.all([
+    const [scoreSnapshot, legacySnapshot, experienceSnapshot] = await Promise.all([
       firestoreSdk.getDocs(scoresRef),
       firestoreSdk.getDoc(legacyRef),
+      firestoreSdk.getDocs(experienceRef),
     ]);
     assertCurrentUser(uid);
-    return scoreStatsFromSnapshot(scoreSnapshot, legacySnapshot);
+    return scoreStatsFromSnapshot(scoreSnapshot, legacySnapshot, experienceSnapshot);
   }
 
   async function writeBetterScore(uid, scoresRef, puzzleId, desired) {
@@ -166,6 +182,19 @@ export async function createFirebaseClient({ sdkLoader = loadFirebaseSdk } = {})
     });
   }
 
+  async function writeExperienceEventIfMissing(uid, experienceRef, eventId, desired) {
+    const eventRef = firestoreSdk.doc(experienceRef, eventId);
+    assertCurrentUser(uid);
+    await firestoreSdk.runTransaction(database, async (transaction) => {
+      assertCurrentUser(uid);
+      const snapshot = await transaction.get(eventRef);
+      assertCurrentUser(uid);
+      if (snapshot.exists()) return;
+      assertCurrentUser(uid);
+      transaction.set(eventRef, { difficulty: desired.difficulty });
+    });
+  }
+
   return {
     onAuthStateChanged(listener) {
       return authSdk.onAuthStateChanged(auth, (user) => {
@@ -183,7 +212,8 @@ export async function createFirebaseClient({ sdkLoader = loadFirebaseSdk } = {})
       const local = normalizeStats(localStats);
       const scoresRef = firestoreSdk.collection(database, 'users', uid, 'scores');
       const legacyRef = firestoreSdk.doc(database, 'users', uid, 'scoreMeta', 'legacy');
-      const remote = await readStats(uid, scoresRef, legacyRef);
+      const experienceRef = firestoreSdk.collection(database, 'users', uid, 'experience');
+      const remote = await readStats(uid, scoresRef, legacyRef, experienceRef);
       const merged = mergeStats(local, remote);
 
       for (const puzzleId of Object.keys(merged.records)) {
@@ -194,7 +224,13 @@ export async function createFirebaseClient({ sdkLoader = loadFirebaseSdk } = {})
       }
       await writeBetterLegacyBest(uid, legacyRef, merged.legacyBest);
 
-      const finalRemote = await readStats(uid, scoresRef, legacyRef);
+      for (const eventId of Object.keys(merged.experienceEvents)) {
+        if (remote.experienceEvents[eventId]) continue;
+        const desired = merged.experienceEvents[eventId];
+        await writeExperienceEventIfMissing(uid, experienceRef, eventId, desired);
+      }
+
+      const finalRemote = await readStats(uid, scoresRef, legacyRef, experienceRef);
       return mergeStats(local, finalRemote);
     },
   };

@@ -22,6 +22,14 @@
 - Firestore paths: `users/{uid}/scores/{puzzleId}` and `users/{uid}/scoreMeta/legacy`. Owner-only rules validate fields and deny all unrelated access. Transactions preserve concurrent record unions and fastest times.
 - Local snapshots retain account-separated `scoreProfiles` alongside the local game/settings. Auth changes preserve the game and switch only score profiles. A completion marker prevents replaying a completed game into another profile.
 
+## Experience
+- `stats.experienceEvents`: unique completion UUID keys with immutable `{difficulty}` payloads; absent on old statistics means zero XP (no backfill). Distinct plays of the same puzzle have distinct IDs. Normalize/merge preserve the event union and deduplicate retries.
+- `js/data/experience.js`: `getExperience(stats)` returns `{totalExp,level,progress}`; progress is 0..99 and level starts at 1. Rewards are 20/30/40/50 by difficulty.
+- `js/data/stats.js`: `awardExperience(stats,eventId,difficulty)` adds one valid completion idempotently.
+- `users/{uid}/experience/{eventId}` is owner-only, exact `{difficulty}`, immutable after creation. Game/board/settings never leave the device. XP is derived from completion events, never a last-write-wins total.
+- `game.experienceAward` is local completion presentation metadata `{eventId,profileKey,totalExp}`, saved atomically with the game marker and score profile. Startup may restore its result for the matching local profile but must never award XP to a pre-existing completed game.
+- `js/data/level-titles.js`: `getLevelTitle(level)` returns display text including 並み, based on the private Levels table; no management identifiers are bundled.
+
 ## Generator
 `tools/generate-puzzles.mjs` CLI generate deterministic seeded unique puzzles and classify with techniques beyond singles. `tools/validate-puzzles.mjs` validates entire dataset. `data/puzzles.json`: `{schemaVersion:1,datasetVersion:1,puzzles:[{puzzleId,difficulty,puzzle}]}` NO solutions. `.local/puzzles-admin.json` full administrative records including solution, score, seed, generator_version, daily_eligible=false, validated=true, created_at. Need 500 per difficulty if feasible, initially generate 30 each then expand after checks. Classification must not use clue count alone. Tests `tests/generator.test.mjs`. Root writes tools/serve.mjs; generator owns other tools/*.mjs only after coordinating names.
 

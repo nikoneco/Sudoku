@@ -10,6 +10,10 @@ service cloud.firestore {
       return puzzleId.matches('^[A-Za-z0-9_-]{1,128}$');
     }
 
+    function validExperienceEventId(eventId) {
+      return eventId.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
+    }
+
     function validDifficulty(value) {
       return value in ['初級', '中級', '上級', '超上級'];
     }
@@ -43,6 +47,14 @@ service cloud.firestore {
         && validBestTimes(data.bestTimes);
     }
 
+    function validExperienceEvent(eventId) {
+      let data = request.resource.data;
+      return validExperienceEventId(eventId)
+        && data.keys().hasOnly(['difficulty'])
+        && data.keys().hasAll(['difficulty'])
+        && validDifficulty(data.difficulty);
+    }
+
     match /users/{userId}/scores/{puzzleId} {
       allow get: if owns(userId) && validPuzzleId(puzzleId);
       allow list: if owns(userId);
@@ -54,6 +66,12 @@ service cloud.firestore {
       allow read: if owns(userId);
       allow create, update: if owns(userId) && validLegacyBest();
       allow delete: if false;
+    }
+
+    match /users/{userId}/experience/{eventId} {
+      allow get, list: if owns(userId);
+      allow create: if owns(userId) && validExperienceEvent(eventId);
+      allow update, delete: if false;
     }
 
     match /{document=**} {

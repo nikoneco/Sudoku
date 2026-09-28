@@ -13,8 +13,12 @@ IndexedDB `sudoku-v1` / object store `kv`。
 ## 成績クラウド
 数独専用Firebase AuthenticationとFirestore。GoogleアカウントのUIDを所有者として、`users/{uid}/scores/{puzzleId}` に `{difficulty,elapsedTime}` を保存。旧版で個別時間が不明な場合はnull。`users/{uid}/scoreMeta/legacy` のbestTimesで旧版の難易度別最短時間を保持する。Firestoreへ盤面・メモ・設定・メールアドレスは保存しない。クリアIDは和集合、時間は最小値をトランザクションで統合する。ルールは所有者UIDとフィールド型・値域を検証し、その他の領域を拒否する。
 
+経験値は `experienceEvents: { [UUID]: {difficulty} }` を各成績プロファイルに保持する。クラウドは `users/{uid}/experience/{UUID}` に同じ内容を作成専用で保存する。既存成績に記録がなければ0Exp。問題IDではなくプレイごとのUUIDで統合するため、再クリアは加算・再送は非加算となる。合計経験値やLvは記録から算出する。完成結果の表示用スナップショットは盤面と一緒に端末内だけへ保存する。
+
 ## 問題DB
 Google Sheets `Puzzles`: puzzle_id / difficulty / puzzle / solution / difficulty_score / seed / generator_version / enabled / daily_eligible / created_at / validated / note。
+
+管理用 `Levels`: Lv / 表示する称号 / 基準cm（管理用） / 対象の目安cm / 比較する部分。Lv1〜200、近い大きさのLvには同じ称号を使用。長さはゲーム用の概算で製品差あり。アプリ同梱の称号定義に管理ID・参照URLは含めない。
 
 `puzzle`、`solution`は先頭0を維持する81文字の文字列。enabled / validated / daily_eligibleは真偽値。Configのschema_version=1、dataset_versionは問題集更新時に増やす。Dailyは無効。
 

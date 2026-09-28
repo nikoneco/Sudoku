@@ -1,4 +1,5 @@
 import { DIFFICULTIES } from '../config.js';
+import { mergeExperienceEvents, normalizeExperienceEvents } from './experience.js';
 
 const PUZZLE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_ELAPSED_TIME = 31_536_000;
@@ -105,7 +106,7 @@ function makeAggregate(records, legacyBest, clearedIds, totalClears, countFloors
 }
 
 export function emptyStats() {
-  return { clearedIds: [], byDifficulty: {}, totalClears: 0, records: {}, legacyBest: {} };
+  return { clearedIds: [], byDifficulty: {}, totalClears: 0, records: {}, legacyBest: {}, experienceEvents: {} };
 }
 
 /** Normalize legacy totals and score records into a safe, deterministic shape. */
@@ -169,9 +170,13 @@ export function normalizeStats(stats, puzzles = []) {
     }
   }
   const totalClears = validCounter(source.totalClears);
+  const experienceEvents = normalizeExperienceEvents(source.experienceEvents);
   const sortedRecords = {};
   for (const puzzleId of Object.keys(records).sort(compareText)) defineMapValue(sortedRecords, puzzleId, records[puzzleId]);
-  return makeAggregate(sortedRecords, legacyBest, clearedIds, totalClears, countFloors);
+  return {
+    ...makeAggregate(sortedRecords, legacyBest, clearedIds, totalClears, countFloors),
+    experienceEvents,
+  };
 }
 
 /** Merge two device/account snapshots using puzzle identity and minimum known times. */
@@ -208,7 +213,21 @@ export function mergeStats(leftStats, rightStats, puzzles = []) {
   const leftTotalBaseline = Math.max(0, left.totalClears - left.clearedIds.length);
   const rightTotalBaseline = Math.max(0, right.totalClears - right.clearedIds.length);
   const totalClears = Math.max(leftTotalBaseline, rightTotalBaseline) + clearedIds.size;
-  return makeAggregate(records, legacyBest, clearedIds, totalClears, countFloors);
+  return {
+    ...makeAggregate(records, legacyBest, clearedIds, totalClears, countFloors),
+    experienceEvents: mergeExperienceEvents(left.experienceEvents, right.experienceEvents),
+  };
+}
+
+/** Award XP for one distinct completion event, safely retryable by event ID. */
+export function awardExperience(stats, eventId, difficulty) {
+  const normalized = normalizeStats(stats);
+  const oneEvent = normalizeExperienceEvents({ [eventId]: { difficulty } });
+  if (!Object.keys(oneEvent).length) return normalized;
+  return normalizeStats({
+    ...normalized,
+    experienceEvents: mergeExperienceEvents(normalized.experienceEvents, oneEvent),
+  });
 }
 
 /** Record one completed puzzle. Replays keep the better known time and never double-count. */

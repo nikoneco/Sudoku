@@ -26,6 +26,46 @@ test('completion is a dismissible result over the full board, with input disable
   assert.equal((root.innerHTML.match(/role="gridcell"/g) || []).length, 81);
 });
 
+test('home shows the signed-in level and object title below SUDOKU only for an account', () => {
+  const root = { scrollTop: 0, querySelector: () => null };
+  const state = {
+    view: 'home', currentGame: null, account: { uid: 'account-1' },
+    stats: { experienceEvents: { '123e4567-e89b-42d3-a456-426614174000': { difficulty: '超上級' } } },
+  };
+  const helpers = { isComplete: () => false };
+
+  renderApp(root, state, [], helpers);
+  assert.match(root.innerHTML, /class="home-level"[^>]*>\s*<span>Lv1<\/span><span>米粒2粒分並み<\/span>/);
+  state.account = null;
+  renderApp(root, state, [], helpers);
+  assert.doesNotMatch(root.innerHTML, /class="home-level"/);
+});
+
+test('clear experience is shown from its completion snapshot, including for a guest', () => {
+  const game = {
+    currentBoard: Array(81).fill(1), initialBoard: Array(81).fill(0),
+    manualIncludedCandidates: Array(81).fill(0), sources: Array(81).fill('manual'),
+    undoStack: [], redoStack: [], difficulty: '中級', elapsedTime: 83,
+  };
+  const state = {
+    view: 'game', currentGame: game, completionOpen: true, selectedCell: 0, settings: {},
+    account: null, completionExperience: { totalExp: 145, level: 2, progress: 45 },
+  };
+  const root = { scrollTop: 0, querySelector: () => null };
+  const helpers = { isComplete: () => true, conflicts: () => [], displayed: () => [], elapsed: 83, pad: getKeypadState };
+
+  renderApp(root, state, ['中級'], helpers);
+  assert.match(root.innerHTML, /data-experience-overlay/);
+  assert.match(root.innerHTML, /data-experience-level>Lv2/);
+  assert.match(root.innerHTML, /data-experience-title>1円玉並み/);
+  assert.match(root.innerHTML, /aria-valuenow="45"/);
+  assert.doesNotMatch(root.innerHTML, /(?:獲得|earned|XP\s*\+?\s*\d+)/i);
+
+  state.completionExperience = null;
+  renderApp(root, state, ['中級'], helpers);
+  assert.doesNotMatch(root.innerHTML, /data-experience-overlay/);
+});
+
 test('theme settings expose four named choices and their selected state', () => {
   const root = { scrollTop: 0, querySelector: () => null };
   renderApp(root, { view: 'settings', settings: { theme: 'night' } }, [], {});

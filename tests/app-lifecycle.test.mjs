@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { DIFFICULTIES, THEMES } from '../js/config.js';
-import { emptyStats, mergeStats, normalizeStats, recordClear } from '../js/data/stats.js';
+import { awardExperience, emptyStats, mergeStats, normalizeStats, recordClear } from '../js/data/stats.js';
+import { getExperience } from '../js/data/experience.js';
+import { webcrypto } from 'node:crypto';
 import {
   emptyScoreProfiles,
   getGuestScoreCount,
@@ -103,6 +105,10 @@ async function app({
     setTimeout: timers.setTimeout,
     clearTimeout,
     performance,
+    crypto: webcrypto,
+    awardExperience,
+    getExperience,
+    createExperienceAnimator: () => ({ sync() {}, cancel() {} }),
     queueMicrotask,
     document: {
       documentElement: { dataset: {} },
@@ -219,6 +225,46 @@ test('completion keeps the board, freezes the clock and can be dismissed without
   }
   assert.equal(vm.runInContext('JSON.stringify(state.currentGame)', context), before);
   assert.equal(vm.runInContext('state.view', context), 'game');
+});
+
+test('new clears earn XP per play, persist once and restore without replaying animation', async () => {
+  const instance = await app();
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  for (let play = 0; play < 2; play += 1) {
+    instance.evaluate(`state.currentGame = { puzzleId: 'replayed-puzzle', difficulty: '超上級', completed: true, elapsedTime: 83 }; state.view = 'game'; finishIfComplete(state.currentGame);`);
+    instance.evaluate('finishIfComplete(state.currentGame)');
+  }
+  assert.equal(getExperience(instance.state().stats).totalExp, 100);
+  assert.equal(instance.state().stats.totalClears, 1);
+  assert.equal(instance.state().completionExperience.level, 2);
+  assert.equal(instance.state().experienceGain.from, 50);
+  await instance.evaluate('queueSave()');
+  const saved = instance.writes.at(-1);
+  assert.equal(Object.keys(saved.scoreProfiles.guest.experienceEvents).length, 2);
+  const restored = await app({ loaded: saved });
+  await waitFor(() => restored.state().cloud.status === 'signed-out');
+  assert.equal(getExperience(restored.state().stats).totalExp, 100);
+  assert.equal(restored.state().completionExperience.level, 2);
+  assert.equal(restored.state().experienceGain, null);
+});
+
+test('old completed saves never earn XP and account changes hide the previous result', async () => {
+  const cloud = makeCloud();
+  const instance = await app({ cloud, loaded: {
+    currentGame: { puzzleId: 'old', difficulty: '超上級', completed: true, elapsedTime: 5 },
+    stats: emptyStats(), scoreProfiles: emptyScoreProfiles(), settings: {},
+  } });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  assert.equal(getExperience(instance.state().stats).totalExp, 0);
+  assert.equal(instance.state().completionExperience, null);
+  instance.evaluate(`state.currentGame = { puzzleId: 'new', difficulty: '中級', completed: true, elapsedTime: 9 }; finishIfComplete(state.currentGame)`);
+  assert.equal(instance.state().completionExperience.totalExp, 30);
+  cloud.emit({ uid: 'another-account' });
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  assert.equal(instance.state().completionExperience, null);
+  assert.equal(instance.state().experienceGain, null);
+  assert.equal(getExperience(instance.state().stats).totalExp, 0);
+  assert.equal(getExperience(instance.state().scoreProfiles.guest).totalExp, 30);
 });
 
 test('saved completed games are marked before authentication and cannot register in a later account', async () => {

@@ -42,7 +42,9 @@ node tools/export-puzzles.mjs --help
 
 設定・成績画面の「Googleでログイン」で、成績のみを端末間で同期できます。Googleログインは任意です。盤面・メモ・設定は端末内に残ります。ログイン前の成績を追加する場合は「この端末の成績を取り込む」を押します。
 
-Google認証は[Firebase公式のポップアップ方式](https://firebase.google.com/docs/auth/web/google-signin)、成績保存はFirestoreのユーザー別領域を使用します。`js/firebase-config.js` は公開用Web構成で、管理者資格情報ではありません。アクセス制限は `firestore.rules` で行います。Google以外のプロバイダ・分析機能・課金プランは使用しません。
+Google認証は[Firebase公式のポップアップ方式](https://firebase.google.com/docs/auth/web/google-signin)、成績保存はFirestoreのユーザー別領域を使用します。経験値も成績と一緒に同期されます。`js/firebase-config.js` は公開用Web構成で、管理者資格情報ではありません。アクセス制限は `firestore.rules` で行います。Google以外のプロバイダ・分析機能・課金プランは使用しません。
+
+経験値は導入後のクリアだけが対象です。同じ問題でも新たにクリアすれば加算され、再読み込み・同期再試行では増えません。実装ではクリアごとのUUID記録を統合し、[Firestoreトランザクション](https://firebase.google.com/docs/firestore/manage-data/transactions)で未登録の記録だけを追加します。称号は管理用Levels表を基に `js/data/level-titles.js` へ同梱しており、表の編集は次回公開時に反映する方式です。
 
 Firestoreルール変更時はローカルエミュレータで `tools/verify-firestore.mjs` を実行し、本人のみの読み書き・他人/未ログインの拒否・盤面/設定の書込み拒否を確認してから、数独専用Firebaseに反映します。検証依存は `.local/firebase-qa` に `firebase-tools @firebase/rules-unit-testing firebase@12.16.0` をインストール（Java 21以降が必要）。`firebase emulators:exec --config firebase.emulator.json --project demo-sudoku --only firestore "node tools/verify-firestore.mjs"`。異なる依存配置は `SUDOKU_FIREBASE_QA_ROOT` で指定できます。本番DBにテスト成績を入れません。
 
