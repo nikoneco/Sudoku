@@ -158,6 +158,83 @@ test("a single manual inclusion never becomes an effective single", () => {
   assert.deepEqual(getEffectiveCandidates(game, 0), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
+test("MEMO on a manually entered digit converts it to the original and selected notes in either display mode", () => {
+  for (const autoCandidates of [true, false]) {
+    let game = transact(blankGame(), { type: "set", cell: 40, value: 1 });
+    const historyLength = game.undoStack.length;
+    const converted = transact(game, {
+      type: "toggleCandidate",
+      cell: 40,
+      value: 9,
+      autoCandidates,
+    });
+
+    assert.equal(converted.currentBoard[40], 0);
+    assert.equal(converted.sources[40], "");
+    assert.equal(converted.manualIncludedCandidates[40], maskOf(1, 9));
+    assert.equal(converted.manualExcludedCandidates[40] & maskOf(1, 9), 0);
+    assert.deepEqual(getDisplayedCandidates(converted, 40, true), [1, 9]);
+    assert.deepEqual(getDisplayedCandidates(converted, 40, false), [1, 9]);
+    assert.deepEqual(converted.lastAutoFilled, []);
+    assert.equal(converted.undoStack.length, historyLength + 1);
+
+    const undone = undo(converted);
+    assert.equal(undone.currentBoard[40], 1);
+    assert.equal(undone.sources[40], "manual");
+    assert.equal(undone.manualIncludedCandidates[40], 0);
+    const redone = redo(undone);
+    assert.equal(redone.currentBoard[40], 0);
+    assert.deepEqual(getDisplayedCandidates(redone, 40, true), [1, 9]);
+    assert.deepEqual(getDisplayedCandidates(redone, 40, false), [1, 9]);
+  }
+});
+
+test("MEMO converts an automatically filled digit back to notes", () => {
+  let game = exclude(blankGame(), 0, [2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.equal(game.currentBoard[0], 1);
+  assert.equal(game.sources[0], "auto");
+
+  const converted = transact(game, { type: "toggleCandidate", cell: 0, value: 9 });
+  assert.equal(converted.currentBoard[0], 0);
+  assert.equal(converted.sources[0], "");
+  assert.equal(converted.manualIncludedCandidates[0], maskOf(1, 9));
+  assert.deepEqual(getDisplayedCandidates(converted, 0, true), [1, 9]);
+  assert.deepEqual(getDisplayedCandidates(converted, 0, false), [1, 9]);
+  assert.deepEqual(converted.lastAutoFilled, []);
+
+  const undone = undo(converted);
+  assert.equal(undone.currentBoard[0], 1);
+  assert.equal(undone.sources[0], "auto");
+  const redone = redo(undone);
+  assert.equal(redone.currentBoard[0], 0);
+  assert.deepEqual(getDisplayedCandidates(redone, 0, true), [1, 9]);
+});
+
+test("MEMO with the same digit leaves a one-candidate note without re-confirming it", () => {
+  const entered = transact(blankGame(), { type: "set", cell: 40, value: 5 });
+  const converted = transact(entered, { type: "toggleCandidate", cell: 40, value: 5 });
+
+  assert.equal(converted.currentBoard[40], 0);
+  assert.equal(converted.sources[40], "");
+  assert.equal(converted.manualIncludedCandidates[40], maskOf(5));
+  assert.deepEqual(getEffectiveCandidates(converted, 40), [5]);
+  assert.deepEqual(getDisplayedCandidates(converted, 40, true), [5]);
+  assert.deepEqual(getDisplayedCandidates(converted, 40, false), [5]);
+  assert.deepEqual(converted.lastAutoFilled, []);
+});
+
+test("MEMO conversion keeps the existing legal-candidate filter for an illegal selected digit", () => {
+  let game = createGame(puzzle({ 1: 9 }));
+  game = transact(game, { type: "set", cell: 0, value: 1 });
+  const converted = transact(game, { type: "toggleCandidate", cell: 0, value: 9 });
+
+  assert.equal(converted.currentBoard[0], 0);
+  assert.equal(converted.manualIncludedCandidates[0], maskOf(1, 9));
+  assert.deepEqual(getDisplayedCandidates(converted, 0, true), [1]);
+  assert.deepEqual(getDisplayedCandidates(converted, 0, false), [1]);
+  assert.deepEqual(converted.lastAutoFilled, []);
+});
+
 test("a hidden single does not auto-fill", () => {
   let game = blankGame();
   for (let cell = 1; cell <= 8; cell += 1) {

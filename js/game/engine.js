@@ -273,6 +273,21 @@ export function transact(game, action) {
     sources: [...game.sources],
   };
 
+  if (action.type === "toggleCandidate" && draft.currentBoard[cell] !== 0) {
+    const originalDigitBit = bitFor(draft.currentBoard[cell]);
+    const selectedDigitBit = bitFor(action.value);
+    const memoMask = originalDigitBit | selectedDigitBit;
+
+    draft.currentBoard[cell] = 0;
+    draft.sources[cell] = "";
+    draft.manualIncludedCandidates[cell] = memoMask;
+
+    const legalAfterClear = legalMaskForBoard(draft.currentBoard, cell);
+    draft.manualExcludedCandidates[cell] &= ~memoMask;
+    draft.manualExcludedCandidates[cell] |= legalAfterClear & ~memoMask;
+    return finishTransaction(game, draft, false);
+  }
+
   if (action.type === "set") {
     if (draft.currentBoard[cell] === action.value) return game;
     draft.currentBoard[cell] = action.value;
