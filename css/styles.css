@@ -29,6 +29,8 @@
 
 * { box-sizing: border-box; }
 
+.icon { display: block; width: 22px; height: 22px; flex-shrink: 0; }
+
 html {
   min-width: 320px;
   min-height: 100%;
