@@ -5,3 +5,6 @@ node_modules/
 LOCAL_URLS.md
 playwright-report/
 test-results/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log

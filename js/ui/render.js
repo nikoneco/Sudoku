@@ -152,6 +152,24 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
   </main>`;
 }
 
+function accountSection(state) {
+  const account = state.account;
+  const cloud = state.cloud || { status: 'loading', busy: false };
+  const labels = { loading: 'ログインを準備中', 'signed-out': 'この端末に保存', syncing: '成績を同期中', synced: '成績を同期済み', error: '成績の同期を確認してください', offline: '端末に保存・オンラインで同期' };
+  const guestCount = state.guestScoreCount ?? state.scoreProfiles?.guest?.totalClears ?? 0;
+  return `<section class="account-section" aria-label="Google連携">
+    <h2 class="setting-label">Google連携</h2>
+    <p class="account-name">${html(account ? account.displayName || 'Googleアカウント' : 'ログインなしで利用中')}</p>
+    <p class="account-status" role="status">${html(cloud.error || labels[cloud.status] || '')}</p>
+    <p class="account-description">同期するのは成績だけです。盤面と設定はこの端末に保存します。</p>
+    <div class="account-actions">${account
+      ? `<button class="account-button" data-action="sync-scores"${cloud.busy ? ' disabled' : ''}>成績を同期</button><button class="account-button account-button--quiet" data-action="sign-out"${cloud.busy ? ' disabled' : ''}>ログアウト</button>`
+      : `<button class="account-button" data-action="sign-in"${cloud.busy || cloud.status === 'loading' ? ' disabled' : ''}>Googleでログイン</button>`}
+    </div>
+    ${account && guestCount > 0 ? `<button class="account-button account-import" data-action="import-guest-scores"${cloud.busy ? ' disabled' : ''}>この端末の成績 ${Math.max(0, Number(guestCount) || 0)}問を取り込む</button>` : ''}
+  </section>`;
+}
+
 function settingsView(state) {
   const themes = THEMES.map((theme) => `<button class="theme-option" data-action="set-theme" data-theme="${html(theme.id)}" aria-pressed="${state.settings.theme === theme.id}">
     <span class="theme-swatch" style="--swatch-color:${html(theme.color)};--swatch-paper:${html(theme.paper)}" aria-hidden="true"></span>
@@ -171,6 +189,7 @@ function settingsView(state) {
           <div class="theme-options" role="group" aria-labelledby="theme-setting-label">${themes}</div>
         </section>
         <button class="settings-link" data-action="stats"><span>成績を見る</span>${icon('chevron')}</button>
+        ${accountSection(state)}
       </div>
     </div>
   </main>`;
@@ -189,6 +208,7 @@ function statsView(state, difficulties) {
     <div class="simple-content">
       <div class="stats-total"><span class="stats-total-label">クリア数</span><strong class="stats-total-value">${Math.max(0, Number(stats.totalClears) || 0)}</strong></div>
       <div class="stats-list" aria-label="難易度別成績">${items}</div>
+      ${accountSection(state)}
     </div>
   </main>`;
 }

@@ -25,7 +25,7 @@ test('service worker reads only its named cache and bypasses stale HTTP assets d
     listeners.fetch({ request: { method: 'GET', mode, url: 'https://example.test/Sudoku/index.html' }, respondWith: promise => { response = promise; } });
     assert.equal(await response, 'current-sudoku');
   }
-  assert.ok(requestedCaches.every(name => name === 'sudoku-shell-v1.0.10'));
+  assert.ok(requestedCaches.every(name => name === 'sudoku-shell-v1.1.0'));
   assert.ok(installRequests.some(request => request.url.endsWith('/js/ui/keypad.js')));
   let intercepted = false;
   listeners.fetch({ request: { method: 'GET', mode: 'cors', url: 'https://example.test/OtherApp/' }, respondWith: () => { intercepted = true; } });

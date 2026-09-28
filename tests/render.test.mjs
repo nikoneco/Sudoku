@@ -32,3 +32,18 @@ test('theme settings expose four named choices and their selected state', () => 
   for (const theme of THEMES) assert.match(root.innerHTML, new RegExp(`data-theme="${theme.id}" aria-pressed="${theme.id === 'night'}"`));
   assert.match(root.innerHTML, /ナイト/);
 });
+
+test('account controls escape user names and keep guest import explicit', () => {
+  const root = { scrollTop: 0, querySelector: () => null };
+  const state = { view: 'stats', stats: {totalClears: 0}, account: {uid:'a',displayName:'<img src=x>'}, cloud:{status:'synced',busy:false}, guestScoreCount:3 };
+  renderApp(root, state, [], {});
+  assert.match(root.innerHTML, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(root.innerHTML, /<img src=x>/);
+  assert.match(root.innerHTML, /data-action="import-guest-scores"/);
+  assert.match(root.innerHTML, /同期するのは成績だけ/);
+  state.account = null;
+  state.cloud.status = 'signed-out';
+  renderApp(root, state, [], {});
+  assert.match(root.innerHTML, /data-action="sign-in"/);
+  assert.doesNotMatch(root.innerHTML, /data-action="import-guest-scores"/);
+});

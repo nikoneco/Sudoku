@@ -12,7 +12,7 @@ iPhone向け数独PWA。候補整理とNaked Singleの連鎖だけを自動化�
 
 ホームに戻っても途中状態は保存されます。新しい問題を選ぶと途中問題を確認なしで入れ替えます。成績は保持されます。
 
-iPhoneではSafariで開き、共有メニューから「ホーム画面に追加」。最初にオンラインで開いた後は、取得済みの問題をオフラインでも遊べます。端末間同期はありません。サイトデータ削除で途中状態と成績も消えるため注意してください。
+iPhoneではSafariで開き、共有メニューから「ホーム画面に追加」。最初にオンラインで開いた後は、取得済みの問題をオフラインでも遊べます。Googleログインで成績のみ端末間同期できます。サイトデータ削除で途中状態と未同期の成績は消えます。
 
 ## 開発
 
@@ -39,6 +39,12 @@ node tools/export-puzzles.mjs --help
 難易度は初級=Hidden Singleまで、中級=Locked Candidates、上級=Pair、超上級=実装済み論理手法では解けず探索を要する問題。空きマス数だけでは分類しません。人間の体感難易度は暫定で、X-Wing等の未実装手法で解ける問題も超上級へ含まれます。
 
 ## Google連携と公開
+
+設定・成績画面の「Googleでログイン」で、成績のみを端末間で同期できます。Googleログインは任意です。盤面・メモ・設定は端末内に残ります。ログイン前の成績を追加する場合は「この端末の成績を取り込む」を押します。
+
+Google認証は[Firebase公式のポップアップ方式](https://firebase.google.com/docs/auth/web/google-signin)、成績保存はFirestoreのユーザー別領域を使用します。`js/firebase-config.js` は公開用Web構成で、管理者資格情報ではありません。アクセス制限は `firestore.rules` で行います。Google以外のプロバイダ・分析機能・課金プランは使用しません。
+
+Firestoreルール変更時はローカルエミュレータで `tools/verify-firestore.mjs` を実行し、本人のみの読み書き・他人/未ログインの拒否・盤面/設定の書込み拒否を確認してから、数独専用Firebaseに反映します。検証依存は `.local/firebase-qa` に `firebase-tools @firebase/rules-unit-testing firebase@12.16.0` をインストール（Java 21以降が必要）。`firebase emulators:exec --config firebase.emulator.json --project demo-sudoku --only firestore "node tools/verify-firestore.mjs"`。異なる依存配置は `SUDOKU_FIREBASE_QA_ROOT` で指定できます。本番DBにテスト成績を入れません。
 
 GASのコードは `gas/`。指定したスプレッドシートのPuzzles/Configから問題集を読み取ります。Script Propertiesの `SUDOKU_SPREADSHEET_ID` に参照先を設定します。`.clasp.json` と管理IDはローカル専用です。
 

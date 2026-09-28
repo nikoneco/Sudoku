@@ -1,0 +1,63 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owns(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function validPuzzleId(puzzleId) {
+      return puzzleId.matches('^[A-Za-z0-9_-]{1,128}$');
+    }
+
+    function validDifficulty(value) {
+      return value in ['初級', '中級', '上級', '超上級'];
+    }
+
+    function validElapsedTime(value) {
+      return value == null || (value is number && value >= 0 && value <= 31536000);
+    }
+
+    function validScore(puzzleId) {
+      let data = request.resource.data;
+      return validPuzzleId(puzzleId)
+        && data.keys().hasOnly(['difficulty', 'elapsedTime'])
+        && data.keys().hasAll(['difficulty', 'elapsedTime'])
+        && validDifficulty(data.difficulty)
+        && validElapsedTime(data.elapsedTime);
+    }
+
+    function validBestTimes(value) {
+      return value is map
+        && value.keys().hasOnly(['初級', '中級', '上級', '超上級'])
+        && (!value.keys().hasAny(['初級']) || validElapsedTime(value['初級']))
+        && (!value.keys().hasAny(['中級']) || validElapsedTime(value['中級']))
+        && (!value.keys().hasAny(['上級']) || validElapsedTime(value['上級']))
+        && (!value.keys().hasAny(['超上級']) || validElapsedTime(value['超上級']));
+    }
+
+    function validLegacyBest() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['bestTimes'])
+        && data.keys().hasAll(['bestTimes'])
+        && validBestTimes(data.bestTimes);
+    }
+
+    match /users/{userId}/scores/{puzzleId} {
+      allow get: if owns(userId) && validPuzzleId(puzzleId);
+      allow list: if owns(userId);
+      allow create, update: if owns(userId) && validScore(puzzleId);
+      allow delete: if false;
+    }
+
+    match /users/{userId}/scoreMeta/legacy {
+      allow read: if owns(userId);
+      allow create, update: if owns(userId) && validLegacyBest();
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

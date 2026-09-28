@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'sudoku-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v1.0.10`;
+const CACHE_NAME = `${CACHE_PREFIX}v1.1.0`;
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -7,6 +7,10 @@ const SHELL_ASSETS = [
   './css/styles.css',
   './js/app.js',
   './js/config.js',
+  './js/firebase-config.js',
+  './js/cloud/firebase-client.js',
+  './js/data/stats.js',
+  './js/data/score-profiles.js',
   './js/game/engine.js',
   './js/data/storage.js',
   './js/data/puzzle-repository.js',

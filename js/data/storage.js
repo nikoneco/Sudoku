@@ -1,7 +1,15 @@
 import { DIFFICULTIES, THEMES } from '../config.js';
+import { emptyStats, normalizeStats, recordClear } from './stats.js';
+import {
+  emptyScoreProfiles,
+  getProfileStats,
+  normalizeScoreProfiles,
+  selectScoreProfile,
+  updateProfileStats,
+} from './score-profiles.js';
 
 export const DEFAULT_SETTINGS = Object.freeze({ autoCandidates: true, theme: 'classic' });
-export const emptyStats = () => ({ clearedIds: [], byDifficulty: {}, totalClears: 0 });
+export { emptyStats, recordClear };
 let database;
 let writeQueue = Promise.resolve();
 
@@ -64,25 +72,40 @@ export function validateGame(game) {
 
 export async function loadApp() {
   const saved = await readValue('app');
-  if (!saved) return { currentGame: null, stats: emptyStats(), settings: { ...DEFAULT_SETTINGS } };
+  if (!saved) {
+    const scoreProfiles = emptyScoreProfiles();
+    return {
+      currentGame: null,
+      stats: scoreProfiles.guest,
+      scoreProfiles,
+      settings: { ...DEFAULT_SETTINGS },
+    };
+  }
   if (!validateGame(saved.currentGame)) throw new Error('途中データを読み込めませんでした。保存データは保持されています。');
   const settings = { ...DEFAULT_SETTINGS, ...saved.settings };
   if (!THEMES.some(theme => theme.id === settings.theme)) settings.theme = DEFAULT_SETTINGS.theme;
-  return { currentGame: saved.currentGame, stats: saved.stats || emptyStats(), settings };
+  const legacyStats = normalizeStats(saved.stats || emptyStats());
+  const scoreProfiles = normalizeScoreProfiles(saved.scoreProfiles, legacyStats);
+  return {
+    currentGame: saved.currentGame,
+    stats: getProfileStats(scoreProfiles),
+    scoreProfiles,
+    settings,
+  };
 }
 
 export function saveApp(app) {
   if (!validateGame(app.currentGame)) return Promise.reject(new Error('保存する盤面が不正です。'));
-  return writeValue('app', app);
-}
-
-/** Count each puzzle once, including after completion is undone and redone. */
-export function recordClear(stats, game) {
-  const next = structuredClone(stats || emptyStats());
-  if (next.clearedIds.includes(game.puzzleId)) return next;
-  next.clearedIds.push(game.puzzleId);
-  next.totalClears = next.clearedIds.length;
-  const tier = next.byDifficulty[game.difficulty] || { clears: 0, bestTime: null };
-  next.byDifficulty[game.difficulty] = { clears: tier.clears + 1, bestTime: tier.bestTime === null ? game.elapsedTime : Math.min(tier.bestTime, game.elapsedTime) };
-  return next;
+  const profileSource = app.scoreProfiles;
+  let scoreProfiles = normalizeScoreProfiles(profileSource, app.stats || emptyStats());
+  const activeKey = profileSource?.activeKey || 'guest';
+  scoreProfiles = selectScoreProfile(scoreProfiles, activeKey);
+  if (app.stats !== undefined) {
+    scoreProfiles = updateProfileStats(scoreProfiles, activeKey, app.stats);
+  }
+  return writeValue('app', {
+    ...app,
+    stats: scoreProfiles.guest,
+    scoreProfiles,
+  });
 }

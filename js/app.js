@@ -9,6 +9,16 @@ import {
   undo,
 } from './game/engine.js';
 import { DEFAULT_SETTINGS, emptyStats, loadApp, recordClear, saveApp } from './data/storage.js';
+import { mergeStats, normalizeStats } from './data/stats.js';
+import {
+  emptyScoreProfiles,
+  getGuestScoreCount,
+  getProfileStats,
+  importGuestScores,
+  normalizeScoreProfiles,
+  selectScoreProfile,
+  updateProfileStats,
+} from './data/score-profiles.js';
 import { choosePuzzle, loadPuzzles, syncPuzzles } from './data/puzzle-repository.js';
 import { formatDuration, renderApp } from './ui/render.js';
 import { getKeypadState } from './ui/keypad.js';
@@ -21,6 +31,10 @@ const state = {
   currentGame: null,
   completionOpen: false,
   stats: emptyStats(),
+  scoreProfiles: emptyScoreProfiles(),
+  guestScoreCount: 0,
+  account: null,
+  cloud: { status: 'loading', busy: false, error: '' },
   settings: { ...DEFAULT_SETTINGS },
   selectedCell: 0,
   inputMode: 'number',
@@ -48,9 +62,70 @@ let pendingUpdateAllowed = false;
 let serviceWorkerRegistration = null;
 let releaseSessionLock = null;
 let sessionLockHeld = false;
+let firebaseClient = null;
+let firebaseClientPromise = null;
+let firebaseAuthUnsubscribe = null;
+let authGeneration = 0;
+let scoreRevision = 0;
+let scoreSyncRequested = false;
+let scoreSyncWorker = null;
+let scorePuzzles = [];
+let scorePuzzlesPromise = null;
+const FIREBASE_CLIENT_TIMEOUT_MS = 12_000;
 
 function snapshot() {
-  return JSON.parse(JSON.stringify({ currentGame: state.currentGame, stats: state.stats, settings: state.settings }));
+  return JSON.parse(JSON.stringify({
+    currentGame: state.currentGame,
+    stats: state.stats,
+    scoreProfiles: state.scoreProfiles,
+    settings: state.settings,
+  }));
+}
+
+function refreshGuestScoreCount() {
+  state.guestScoreCount = getGuestScoreCount(state.scoreProfiles);
+}
+
+function updateActiveStats(stats, puzzles = scorePuzzles) {
+  const key = state.scoreProfiles.activeKey || 'guest';
+  state.scoreProfiles = updateProfileStats(state.scoreProfiles, key, stats, puzzles);
+  state.stats = getProfileStats(state.scoreProfiles, key);
+  scoreRevision += 1;
+  refreshGuestScoreCount();
+}
+
+function activateScoreProfile(key, displayName) {
+  const previousKey = state.scoreProfiles.activeKey || 'guest';
+  const previousName = state.account?.uid === key ? state.account.displayName : '';
+  state.scoreProfiles = selectScoreProfile(state.scoreProfiles, key, scorePuzzles);
+  state.stats = getProfileStats(state.scoreProfiles, key);
+  state.account = key === 'guest'
+    ? null
+    : { uid: key, displayName: displayName || previousName || '保存済みアカウント' };
+  if (previousKey !== key) scoreRevision += 1;
+  refreshGuestScoreCount();
+  void queueSave();
+}
+
+function cloudFailure(message) {
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  state.cloud = {
+    status: offline ? 'offline' : 'error',
+    busy: false,
+    error: message || 'Google同期に接続できません。保存した成績はこの端末に残っています。',
+  };
+  render();
+}
+
+function isCurrentCloudSession(uid, generation) {
+  return authGeneration === generation
+    && state.account?.uid === uid
+    && state.scoreProfiles.activeKey === uid;
+}
+
+function updateCloudState(patch) {
+  state.cloud = { ...state.cloud, ...patch };
+  render();
 }
 
 function drainWrites() {
@@ -222,11 +297,22 @@ function announce(text) {
   render();
 }
 
+function registerCompletedGame(game) {
+  if (game.scoreRecorded) return game;
+  const completedGame = { ...game, scoreRecorded: true };
+  updateActiveStats(recordClear(state.stats, completedGame));
+  return completedGame;
+}
+
 function finishIfComplete(game) {
   if (!isComplete(game)) return false;
+  const elapsedTime = currentElapsed();
   stopClock();
-  state.currentGame = { ...state.currentGame, ...game, elapsedTime: currentElapsed() };
-  state.stats = recordClear(state.stats, state.currentGame);
+  state.currentGame = registerCompletedGame({
+    ...state.currentGame,
+    ...game,
+    elapsedTime,
+  });
   state.view = 'game';
   state.completionOpen = true;
   state.announce = '完成しました';
@@ -239,6 +325,7 @@ function commitGame(next, previous) {
   if (finishIfComplete(next)) {
     render();
     void queueSave();
+    void requestScoreSync();
     return true;
   }
   const filledCount = Array.isArray(next.lastAutoFilled) ? next.lastAutoFilled.length : 0;
@@ -298,6 +385,252 @@ function toggleInputMode() {
   state.inputMode = state.inputMode === 'memo' ? 'number' : 'memo';
   state.announce = state.inputMode === 'memo' ? '候補メモに切り替えました' : '数字入力に切り替えました';
   render();
+}
+
+async function loadFirebaseClientModule() {
+  return import('./cloud/firebase-client.js');
+}
+
+function withTimeout(promise, timeoutMs = FIREBASE_CLIENT_TIMEOUT_MS) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Optional cloud setup timed out')), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function loadScorePuzzleCatalog() {
+  if (scorePuzzlesPromise) return scorePuzzlesPromise;
+  scorePuzzlesPromise = loadPuzzles().then((puzzles) => {
+    scorePuzzles = puzzles;
+    const before = JSON.stringify(state.scoreProfiles);
+    const profiles = normalizeScoreProfiles(state.scoreProfiles, state.scoreProfiles?.guest || state.stats, puzzles);
+    if (JSON.stringify(profiles) !== before) {
+      state.scoreProfiles = profiles;
+      state.stats = getProfileStats(profiles);
+      scoreRevision += 1;
+      refreshGuestScoreCount();
+      void queueSave();
+      render();
+      if (state.account?.uid) void requestScoreSync();
+    }
+    return scorePuzzles;
+  }).catch(() => {
+    scorePuzzlesPromise = null;
+    scorePuzzles = [];
+    return [];
+  });
+  return scorePuzzlesPromise;
+}
+
+function handleFirebaseAuthState(user) {
+  authGeneration += 1;
+  const uid = typeof user?.uid === 'string' && user.uid && user.uid !== 'guest' ? user.uid : null;
+  scoreSyncRequested = Boolean(uid);
+  state.cloud = uid
+    ? { status: 'syncing', busy: true, error: '' }
+    : { status: 'signed-out', busy: false, error: '' };
+  activateScoreProfile(uid || 'guest', user?.displayName);
+  render();
+  if (uid) void requestScoreSync();
+}
+
+async function ensureFirebaseClient() {
+  if (firebaseClient) return firebaseClient;
+  if (firebaseClientPromise) return firebaseClientPromise;
+  firebaseClientPromise = (async () => {
+    const { createFirebaseClient } = await withTimeout(loadFirebaseClientModule());
+    if (typeof createFirebaseClient !== 'function') throw new Error('Firebase adapter is unavailable');
+    const client = await withTimeout(createFirebaseClient());
+    if (!client || typeof client.onAuthStateChanged !== 'function'
+      || typeof client.signIn !== 'function' || typeof client.signOut !== 'function'
+      || typeof client.syncStats !== 'function') {
+      throw new Error('Firebase adapter has an incomplete interface');
+    }
+    firebaseClient = client;
+    firebaseAuthUnsubscribe = client.onAuthStateChanged(handleFirebaseAuthState) || null;
+    return client;
+  })().catch((error) => {
+    firebaseClient = null;
+    firebaseClientPromise = null;
+    cloudFailure('Google同期に接続できません。保存した成績はこの端末に残っています。');
+    throw error;
+  });
+  return firebaseClientPromise;
+}
+
+async function prepareFirebaseClient() {
+  try {
+    await ensureFirebaseClient();
+  } catch {
+    // Local play and score profiles stay available when the optional cloud client fails.
+  }
+}
+
+function requestScoreSync() {
+  const uid = state.account?.uid;
+  if (!uid || state.scoreProfiles.activeKey !== uid) return Promise.resolve(null);
+  if (!firebaseClient) {
+    return ensureFirebaseClient().then(() => requestScoreSync()).catch(() => null);
+  }
+
+  scoreSyncRequested = true;
+  if (scoreSyncWorker) return scoreSyncWorker;
+  state.cloud = { status: 'syncing', busy: true, error: '' };
+  render();
+  scoreSyncWorker = (async () => {
+    while (scoreSyncRequested) {
+      scoreSyncRequested = false;
+      const currentUid = state.account?.uid;
+      if (!currentUid || state.scoreProfiles.activeKey !== currentUid) break;
+      const generation = authGeneration;
+
+      try {
+        const puzzles = await loadScorePuzzleCatalog();
+        if (!isCurrentCloudSession(currentUid, generation)) continue;
+        const revision = scoreRevision;
+        const localStats = structuredClone(normalizeStats(
+          getProfileStats(state.scoreProfiles, currentUid),
+          puzzles,
+        ));
+
+        await queueSave();
+        const locallyDurable = await flushWrites();
+        if (!isCurrentCloudSession(currentUid, generation)) continue;
+        if (!locallyDurable) {
+          state.cloud = {
+            status: 'error',
+            busy: false,
+            error: '成績を端末に保存できません。保存後にもう一度同期してください。',
+          };
+          render();
+          scoreSyncRequested = false;
+          break;
+        }
+        if (scoreRevision !== revision) {
+          scoreSyncRequested = true;
+          continue;
+        }
+
+        const remoteStats = await firebaseClient.syncStats(currentUid, localStats);
+        if (!isCurrentCloudSession(currentUid, generation)) continue;
+        const changedDuringRequest = scoreRevision !== revision;
+        const normalizedRemote = normalizeStats(remoteStats, puzzles);
+        const merged = changedDuringRequest
+          ? mergeStats(getProfileStats(state.scoreProfiles, currentUid), normalizedRemote, puzzles)
+          : normalizedRemote;
+        state.scoreProfiles = updateProfileStats(state.scoreProfiles, currentUid, merged, puzzles);
+        state.stats = getProfileStats(state.scoreProfiles, currentUid);
+        scoreRevision += 1;
+        refreshGuestScoreCount();
+        render();
+
+        await queueSave();
+        const mergedLocallyDurable = await flushWrites();
+        if (!isCurrentCloudSession(currentUid, generation)) continue;
+        if (!mergedLocallyDurable) {
+          state.cloud = {
+            status: 'error',
+            busy: false,
+            error: '同期した成績を端末に保存できませんでした。再試行してください。',
+          };
+          render();
+          scoreSyncRequested = false;
+          break;
+        }
+        if (changedDuringRequest) scoreSyncRequested = true;
+        if (scoreSyncRequested) continue;
+        state.cloud = { status: 'synced', busy: false, error: '' };
+        render();
+      } catch {
+        if (!isCurrentCloudSession(currentUid, generation)) continue;
+        scoreSyncRequested = false;
+        cloudFailure('成績をGoogleへ同期できませんでした。端末には保存されています。再試行できます。');
+        break;
+      }
+    }
+  })().finally(() => {
+    scoreSyncWorker = null;
+    if (scoreSyncRequested && state.account?.uid) void requestScoreSync();
+  });
+  return scoreSyncWorker;
+}
+
+async function signInToGoogle() {
+  state.cloud = { ...state.cloud, status: 'loading', busy: true, error: '' };
+  render();
+  try {
+    const client = await ensureFirebaseClient();
+    const generation = authGeneration;
+    state.cloud = { status: 'loading', busy: true, error: '' };
+    render();
+    const user = await client.signIn();
+    if (authGeneration === generation && user?.uid) handleFirebaseAuthState(user);
+    else if (authGeneration === generation) {
+      state.cloud = { status: 'signed-out', busy: false, error: '' };
+      render();
+    }
+  } catch {
+    cloudFailure('Googleログインに失敗しました。接続を確認してもう一度お試しください。');
+  }
+}
+
+async function signOutOfGoogle() {
+  const uid = state.account?.uid;
+  if (!uid) return;
+  state.cloud = { ...state.cloud, busy: true, error: '' };
+  render();
+  try {
+    const client = await ensureFirebaseClient();
+    const generation = authGeneration;
+    await client.signOut();
+    if (authGeneration === generation) handleFirebaseAuthState(null);
+  } catch {
+    cloudFailure('Googleからログアウトできませんでした。もう一度お試しください。');
+  }
+}
+
+async function importGuestScoresForAccount() {
+  const uid = state.account?.uid;
+  if (!uid || state.scoreProfiles.activeKey !== uid || state.guestScoreCount === 0) return;
+  const generation = authGeneration;
+  state.cloud = { status: 'syncing', busy: true, error: '' };
+  render();
+  try {
+    const puzzles = await loadScorePuzzleCatalog();
+    if (!isCurrentCloudSession(uid, generation)) return;
+    state.scoreProfiles = importGuestScores(state.scoreProfiles, uid, puzzles);
+    state.stats = getProfileStats(state.scoreProfiles, uid);
+    scoreRevision += 1;
+    refreshGuestScoreCount();
+    render();
+    await queueSave();
+    const durable = await flushWrites();
+    if (!isCurrentCloudSession(uid, generation)) return;
+    if (!durable) {
+      // Keep the latest in-memory results, including clears made while saving.
+      // The failed atomic write leaves the previous durable snapshot intact.
+      state.cloud = {
+        status: 'error',
+        busy: false,
+        error: '取り込んだ成績を端末に保存できませんでした。保存を再試行してから同期してください。',
+      };
+      render();
+      return;
+    }
+    void requestScoreSync();
+  } catch {
+    if (isCurrentCloudSession(uid, generation)) {
+      state.cloud = {
+        status: 'error',
+        busy: false,
+        error: 'ゲスト成績を取り込めませんでした。もう一度お試しください。',
+      };
+      render();
+    }
+  }
 }
 
 function runSync() {
@@ -366,6 +699,10 @@ root.addEventListener('click', (event) => {
     void queueSave();
   } else if (action === 'retry-save') void queueSave();
   else if (action === 'retry-sync') void runSync();
+  else if (action === 'sign-in') void signInToGoogle();
+  else if (action === 'sign-out') void signOutOfGoogle();
+  else if (action === 'sync-scores') void requestScoreSync();
+  else if (action === 'import-guest-scores') void importGuestScoresForAccount();
   else if (action === 'dismiss-error') { state.uiError = ''; render(); }
   else if (action === 'apply-update') activateUpdate();
   else if (action === 'retry-load') void initialize();
@@ -417,7 +754,16 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     stopClock();
     void queueSave();
-  } else if (state.view === 'game') startClock();
+  } else {
+    if (state.view === 'game') startClock();
+    if (state.account?.uid) void requestScoreSync();
+  }
+});
+
+window.addEventListener('online', () => {
+  if (state.account?.uid) void requestScoreSync();
+  else if (!firebaseClient) void prepareFirebaseClient();
+  void runSync();
 });
 
 window.addEventListener('pagehide', () => {
@@ -496,19 +842,30 @@ async function initialize() {
     }
     const saved = await loadApp();
     state.currentGame = saved.currentGame || null;
-    state.stats = saved.stats || emptyStats();
+    state.scoreProfiles = normalizeScoreProfiles(saved.scoreProfiles, saved.stats || emptyStats());
+    state.stats = getProfileStats(state.scoreProfiles);
+    const cachedKey = state.scoreProfiles.activeKey;
+    state.account = cachedKey === 'guest'
+      ? null
+      : { uid: cachedKey, displayName: '保存済みアカウント' };
+    refreshGuestScoreCount();
     state.settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
     state.storageReady = true;
+    let initializationNeedsSave = JSON.stringify(saved.scoreProfiles || null) !== JSON.stringify(state.scoreProfiles);
     if (state.currentGame && isComplete(state.currentGame)) {
-      state.stats = recordClear(state.stats, state.currentGame);
+      const previousGame = state.currentGame;
+      state.currentGame = registerCompletedGame(state.currentGame);
+      initializationNeedsSave ||= previousGame !== state.currentGame;
       state.view = 'game';
       state.completionOpen = true;
-      void queueSave();
     } else {
       state.view = 'home';
     }
     ready = true;
     render();
+    if (initializationNeedsSave) void queueSave();
+    void loadScorePuzzleCatalog();
+    void prepareFirebaseClient();
     void runSync();
   } catch {
     state.view = 'home';
