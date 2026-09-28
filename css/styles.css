@@ -323,6 +323,8 @@ button:focus-visible {
 .memo-mode .cell.related:not(.conflict) { background: #f7ecdf; }
 .memo-mode .cell.selected:not(.conflict) { background: #edd5b9; }
 .memo-mode .cell.selected:not(.conflict)::after { border-color: var(--orange); }
+.cell.same-number:not(.selected):not(.conflict) { background: #e9e2f4; color: #69518b; }
+.cell.same-number:not(.selected):not(.conflict) .cell-value { color: #69518b; }
 .cell.conflict { color: var(--danger); background: var(--danger-soft); }
 .cell.conflict.same-number { background: #f1dfd8; }
 .cell.conflict::after { border: 1px solid rgb(166 88 79 / 68%); }

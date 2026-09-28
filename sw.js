@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'sudoku-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v1.0.3`;
+const CACHE_NAME = `${CACHE_PREFIX}v1.0.4`;
 const SHELL_ASSETS = [
   './',
   './index.html',
