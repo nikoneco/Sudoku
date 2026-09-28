@@ -18,6 +18,7 @@ const state = {
   returnView: 'home',
   statsReturnView: 'home',
   currentGame: null,
+  completionOpen: false,
   stats: emptyStats(),
   settings: { ...DEFAULT_SETTINGS },
   selectedCell: 0,
@@ -185,6 +186,7 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
     const game = createGame(puzzle);
     if (isComplete(game)) throw new Error('Puzzle auto-completed at start');
     state.currentGame = game;
+    state.completionOpen = false;
     state.selectedCell = chooseInitialCell(game);
     state.inputMode = 'number';
     state.returnView = 'home';
@@ -204,11 +206,7 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
 
 function resumeGame() {
   if (!state.currentGame) return;
-  if (isComplete(state.currentGame)) {
-    state.view = 'completion';
-    render();
-    return;
-  }
+  state.completionOpen = isComplete(state.currentGame);
   state.view = 'game';
   startClock();
   render();
@@ -224,7 +222,8 @@ function finishIfComplete(game) {
   stopClock();
   state.currentGame = { ...state.currentGame, ...game, elapsedTime: currentElapsed() };
   state.stats = recordClear(state.stats, state.currentGame);
-  state.view = 'completion';
+  state.view = 'game';
+  state.completionOpen = true;
   state.announce = '完成しました';
   return true;
 }
@@ -247,7 +246,7 @@ function commitGame(next, previous) {
 function enterDigit(digit) {
   const game = state.currentGame;
   const cell = state.selectedCell;
-  if (!game || !Number.isInteger(cell)) return;
+  if (!game || isComplete(game) || !Number.isInteger(cell)) return;
   const previous = game;
   const next = state.inputMode === 'memo'
     ? transact(game, { type: 'toggleCandidate', cell, value: digit, autoCandidates: state.settings.autoCandidates })
@@ -335,6 +334,8 @@ root.addEventListener('click', (event) => {
   const control = event.target.closest('[data-action]');
   if (!control) return;
   const action = control.dataset.action;
+  if (state.view === 'game' && isComplete(state.currentGame)
+    && ['digit', 'delete', 'clear-notes', 'undo', 'redo', 'toggle-mode'].includes(action)) return;
   if (action === 'new-game') void startNewGame(control.dataset.difficulty);
   else if (action === 'new-same') void startNewGame(state.currentGame?.difficulty);
   else if (action === 'resume') resumeGame();
@@ -359,10 +360,17 @@ root.addEventListener('click', (event) => {
   else if (action === 'apply-update') activateUpdate();
   else if (action === 'retry-load') void initialize();
   else if (action === 'reload') window.location.reload();
+  else if (action === 'dismiss-completion') { state.completionOpen = false; render(); }
 });
 
 root.addEventListener('keydown', (event) => {
   if (state.view !== 'game' || !state.currentGame) return;
+  if (event.key === 'Escape' && state.completionOpen) {
+    state.completionOpen = false;
+    render();
+    return;
+  }
+  if (isComplete(state.currentGame)) return;
   if (event.ctrlKey || event.metaKey) {
     if (event.key.toLowerCase() === 'z') {
       event.preventDefault();
@@ -483,7 +491,8 @@ async function initialize() {
     state.storageReady = true;
     if (state.currentGame && isComplete(state.currentGame)) {
       state.stats = recordClear(state.stats, state.currentGame);
-      state.view = 'completion';
+      state.view = 'game';
+      state.completionOpen = true;
       void queueSave();
     } else {
       state.view = 'home';

@@ -80,8 +80,9 @@ function boxOf(index) {
   return Math.floor(Math.floor(index / 9) / 3) * 3 + Math.floor((index % 9) / 3);
 }
 
-function gameView(state, difficultyList, { displayed, conflicts, elapsed }) {
+function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComplete }) {
   const game = state.currentGame;
+  const completed = isComplete(game);
   const selected = Number.isInteger(state.selectedCell) ? state.selectedCell : 0;
   const selectedValue = game.currentBoard[selected] || 0;
   const selectedRow = Math.floor(selected / 9);
@@ -118,8 +119,11 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed }) {
       <div class="header-end"><button class="header-button header-button--settings" data-action="settings" aria-label="設定を開く">${icon('settings')}</button></div>
     </header>
     <div class="game-meta"><span class="game-difficulty">${html(difficulty)}</span><time class="game-timer" aria-label="経過時間">${formatDuration(elapsed)}</time></div>
-    <section class="board" role="grid" aria-label="数独盤面">${cells}</section>
-    <section class="entry-panel" aria-label="入力">
+    <div class="board-stage">
+      <section class="board" role="grid" aria-label="数独盤面">${cells}</section>
+      ${completed && state.completionOpen ? completionOverlay(game) : ''}
+    </div>
+    <section class="entry-panel" aria-label="入力"${completed ? ' inert aria-disabled="true"' : ''}>
       <div class="entry-head">
         <span class="mode-label${modeMemo ? ' memo' : ''}" aria-live="polite"><i class="mode-dot"></i>${modeMemo ? '候補メモ' : '数字入力'}</span>
         ${canClearNotes ? '<button class="clear-notes" data-action="clear-notes">候補を消去</button>' : ''}
@@ -172,22 +176,12 @@ function statsView(state, difficulties) {
   </main>`;
 }
 
-function completionView(state) {
-  const game = state.currentGame;
-  return `<main class="screen simple-screen">
-    ${notices(state)}
-    ${pageHeader('完成', 'home')}
-    <section class="completion-content">
-      <span class="completion-mark">${icon('check')}</span>
-      <h1 class="completion-title">完成</h1>
-      <time class="completion-time">${formatDuration(game.elapsedTime)}</time>
-      <span class="completion-difficulty">${html(game.difficulty)}</span>
-      <div class="completion-actions">
-        <button class="primary-action" data-action="new-same"${state.busy ? ' disabled' : ''}>もう一問</button>
-        <button class="secondary-action" data-action="home">ホームへ</button>
-      </div>
-    </section>
-  </main>`;
+function completionOverlay(game) {
+  return `<section class="clear-overlay" role="status" aria-label="CLEAR">
+    <button class="clear-close" data-action="dismiss-completion" aria-label="完成表示を閉じる">×</button>
+    <strong class="clear-title">CLEAR</strong>
+    <p class="clear-result"><span>${html(game.difficulty)}</span><time>${formatDuration(game.elapsedTime)}</time></p>
+  </section>`;
 }
 
 export function renderApp(root, state, difficulties, helpers) {
@@ -197,11 +191,12 @@ export function renderApp(root, state, difficulties, helpers) {
   else if (state.view === 'game' && state.currentGame) view = gameView(state, difficulties, helpers);
   else if (state.view === 'settings') view = settingsView(state);
   else if (state.view === 'stats') view = statsView(state, difficulties);
-  else if (state.view === 'completion' && state.currentGame) view = completionView(state);
   else view = '<main class="screen loading-screen" aria-busy="true"><span class="brand">SUDOKU</span><span class="loading-mark" aria-hidden="true"></span></main>';
   root.innerHTML = view;
   root.scrollTop = previousScroll;
-  if (state.view === 'game' && Number.isInteger(state.selectedCell)) {
+  if (state.view === 'game' && state.completionOpen) {
+    root.querySelector('[data-action="dismiss-completion"]')?.focus({ preventScroll: true });
+  } else if (state.view === 'game' && Number.isInteger(state.selectedCell)) {
     root.querySelector(`[data-cell="${state.selectedCell}"]`)?.focus({ preventScroll: true });
   }
 }

@@ -259,12 +259,16 @@ button:focus-visible {
 .game-difficulty { color: var(--ink-soft); font-size: 14px; font-weight: 560; }
 .game-timer { min-width: 5ch; color: var(--ink); font-size: 18px; font-variant-numeric: tabular-nums; letter-spacing: .03em; text-align: right; }
 
-.board {
-  display: grid;
+.board-stage {
+  position: relative;
   width: min(100%, 460px, calc(100svh - 296px));
-  aspect-ratio: 1;
   flex: 0 0 auto;
   align-self: center;
+}
+.board {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 1;
   grid-template-columns: repeat(9, minmax(0, 1fr));
   grid-template-rows: repeat(9, minmax(0, 1fr));
   overflow: hidden;
@@ -528,31 +532,35 @@ button:focus-visible {
 .stats-clears { color: var(--ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .stats-best { min-width: 52px; color: var(--teal); font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 
-.completion-content {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 20px 8px 34px;
+.clear-overlay {
+  position: absolute;
+  z-index: 5;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(260px, 82%);
+  padding: 32px 22px 27px;
+  border: 1px solid var(--teal-mid);
+  border-radius: 10px;
+  background: rgb(247 245 239 / 97%);
+  box-shadow: 0 8px 30px rgb(37 54 59 / 22%);
   text-align: center;
 }
-.completion-mark {
-  display: grid;
-  width: 66px;
-  height: 66px;
-  place-items: center;
-  margin-bottom: 18px;
-  border: 1px solid var(--teal-mid);
-  border-radius: 50%;
-  background: var(--teal-soft);
-  color: var(--teal);
+.clear-title { color: var(--teal); font-size: 29px; font-weight: 600; letter-spacing: .16em; }
+.clear-result { display: flex; justify-content: center; gap: 14px; margin: 12px 0 0; font-size: 16px; font-variant-numeric: tabular-nums; }
+.clear-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 22px;
+  cursor: pointer;
 }
-.completion-mark .icon { width: 31px; height: 31px; }
-.completion-title { margin: 0; color: var(--ink); font-size: 25px; font-weight: 560; letter-spacing: .1em; }
-.completion-time { margin-top: 9px; color: var(--teal); font-size: 22px; font-variant-numeric: tabular-nums; letter-spacing: .05em; }
-.completion-difficulty { margin-top: 5px; color: var(--ink-soft); font-size: 14px; }
-.completion-actions { display: grid; width: min(100%, 310px); gap: 10px; margin-top: 34px; }
+.entry-panel[aria-disabled="true"] { opacity: .45; }
 .primary-action, .secondary-action {
   display: inline-flex;
   min-height: 50px;
