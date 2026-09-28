@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'sudoku-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v1.0.7`;
+const CACHE_NAME = `${CACHE_PREFIX}v1.0.8`;
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -13,6 +13,7 @@ const SHELL_ASSETS = [
   './js/data/api.js',
   './js/ui/icons.js',
   './js/ui/render.js',
+  './js/ui/keypad.js',
   './data/puzzles.json',
   './icons/app-icon.svg',
   './icons/app-icon-180.png',

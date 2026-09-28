@@ -1,4 +1,4 @@
-import { DIFFICULTIES } from './config.js';
+import { DIFFICULTIES, THEMES } from './config.js';
 import {
   createGame,
   getConflicts,
@@ -11,6 +11,7 @@ import {
 import { DEFAULT_SETTINGS, emptyStats, loadApp, recordClear, saveApp } from './data/storage.js';
 import { choosePuzzle, loadPuzzles, syncPuzzles } from './data/puzzle-repository.js';
 import { formatDuration, renderApp } from './ui/render.js';
+import { getKeypadState } from './ui/keypad.js';
 
 const root = document.querySelector('#app');
 const state = {
@@ -87,10 +88,14 @@ async function flushWrites() {
 }
 
 function render() {
+  const theme = THEMES.find(item => item.id === state.settings.theme) || THEMES[0];
+  document.documentElement.dataset.theme = theme.id;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme.paper);
   renderApp(root, state, DIFFICULTIES, {
     displayed: getDisplayedCandidates,
     conflicts: getConflicts,
     isComplete,
+    pad: getKeypadState,
     elapsed: currentElapsed(),
   });
 }
@@ -247,6 +252,7 @@ function enterDigit(digit) {
   const game = state.currentGame;
   const cell = state.selectedCell;
   if (!game || isComplete(game) || !Number.isInteger(cell)) return;
+  if (getKeypadState(game, cell, state.inputMode).find(key => key.digit === digit)?.disabled) return;
   const previous = game;
   const next = state.inputMode === 'memo'
     ? transact(game, { type: 'toggleCandidate', cell, value: digit, autoCandidates: state.settings.autoCandidates })
@@ -352,6 +358,10 @@ root.addEventListener('click', (event) => {
   else if (action === 'toggle-auto') {
     state.settings = { ...state.settings, autoCandidates: !state.settings.autoCandidates };
     state.announce = state.settings.autoCandidates ? '自動候補表示をオンにしました' : '自動候補表示をオフにしました';
+    render();
+    void queueSave();
+  } else if (action === 'set-theme' && THEMES.some(theme => theme.id === control.dataset.theme)) {
+    state.settings = { ...state.settings, theme: control.dataset.theme };
     render();
     void queueSave();
   } else if (action === 'retry-save') void queueSave();

@@ -1,4 +1,5 @@
 import { icon } from './icons.js';
+import { THEMES } from '../config.js';
 
 const html = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -80,7 +81,7 @@ function boxOf(index) {
   return Math.floor(Math.floor(index / 9) / 3) * 3 + Math.floor((index % 9) / 3);
 }
 
-function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComplete }) {
+function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComplete, pad: keypadState }) {
   const game = state.currentGame;
   const completed = isComplete(game);
   const selected = Number.isInteger(state.selectedCell) ? state.selectedCell : 0;
@@ -106,8 +107,16 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
     const accessibleFlags = [isGiven ? '固定' : '入力可能', conflictSet.has(index) ? '衝突' : ''].filter(Boolean).join('、');
     return `<button class="${classes.join(' ')}" role="gridcell" aria-selected="${index === selected}" aria-label="${row + 1}行${col + 1}列、${accessibleValue}${accessibleFlags ? `、${accessibleFlags}` : ''}" data-cell="${index}">${display}</button>`;
   }).join('');
-  const digits = [1, 3, 5, 7, 9].map((digit) => `<button class="number-key" data-action="digit" data-digit="${digit}" aria-label="${digit}">${digit}</button>`).join('');
-  const evens = [2, 4, 6, 8].map((digit) => `<button class="number-key" data-action="digit" data-digit="${digit}" aria-label="${digit}">${digit}</button>`).join('');
+  const pad = keypadState(game, selected, state.inputMode);
+  const padByDigit = new Map(pad.map((key) => [key.digit, key]));
+  const numberKey = (digit) => {
+    const key = padByDigit.get(digit) || { muted: false, disabled: false };
+    const classes = ['number-key'];
+    if (key.muted) classes.push('is-muted');
+    return `<button class="${classes.join(' ')}" data-action="digit" data-digit="${digit}" aria-label="${digit}"${key.disabled ? ' disabled title="このマスには入力できません"' : ''}>${digit}</button>`;
+  };
+  const digits = [1, 3, 5, 7, 9].map(numberKey).join('');
+  const evens = [2, 4, 6, 8].map(numberKey).join('');
   const modeMemo = state.inputMode === 'memo';
   const difficulty = difficultyList.includes(game.difficulty) ? game.difficulty : game.difficulty;
   const canClearNotes = modeMemo && !game.currentBoard[selected];
@@ -144,6 +153,10 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
 }
 
 function settingsView(state) {
+  const themes = THEMES.map((theme) => `<button class="theme-option" data-action="set-theme" data-theme="${html(theme.id)}" aria-pressed="${state.settings.theme === theme.id}">
+    <span class="theme-swatch" style="--swatch-color:${html(theme.color)};--swatch-paper:${html(theme.paper)}" aria-hidden="true"></span>
+    <span class="theme-label">${html(theme.label)}</span>
+  </button>`).join('');
   return `<main class="screen simple-screen">
     ${notices(state)}
     ${pageHeader('設定')}
@@ -153,6 +166,10 @@ function settingsView(state) {
           <span class="setting-label" id="auto-candidates-label">自動候補表示</span>
           <button class="switch" role="switch" aria-checked="${Boolean(state.settings.autoCandidates)}" aria-labelledby="auto-candidates-label" data-action="toggle-auto"></button>
         </div>
+        <section class="theme-setting" aria-labelledby="theme-setting-label">
+          <h2 class="setting-label" id="theme-setting-label">配色テーマ</h2>
+          <div class="theme-options" role="group" aria-labelledby="theme-setting-label">${themes}</div>
+        </section>
         <button class="settings-link" data-action="stats"><span>成績を見る</span>${icon('chevron')}</button>
       </div>
     </div>
@@ -181,11 +198,13 @@ function completionOverlay(game) {
     <button class="clear-close" data-action="dismiss-completion" aria-label="完成表示を閉じる">×</button>
     <strong class="clear-title">CLEAR</strong>
     <p class="clear-result"><span>${html(game.difficulty)}</span><time>${formatDuration(game.elapsedTime)}</time></p>
+    <button class="clear-home primary-action" data-action="home">ホームへ</button>
   </section>`;
 }
 
 export function renderApp(root, state, difficulties, helpers) {
   const previousScroll = root.scrollTop;
+  const focusedTheme = root.querySelector('[data-action="set-theme"]:focus')?.dataset.theme;
   let view;
   if (state.view === 'home') view = homeView(state, difficulties, helpers.isComplete);
   else if (state.view === 'game' && state.currentGame) view = gameView(state, difficulties, helpers);
@@ -194,7 +213,9 @@ export function renderApp(root, state, difficulties, helpers) {
   else view = '<main class="screen loading-screen" aria-busy="true"><span class="brand">SUDOKU</span><span class="loading-mark" aria-hidden="true"></span></main>';
   root.innerHTML = view;
   root.scrollTop = previousScroll;
-  if (state.view === 'game' && state.completionOpen) {
+  if (state.view === 'settings' && THEMES.some(theme => theme.id === focusedTheme)) {
+    root.querySelector(`[data-theme="${focusedTheme}"]`)?.focus({ preventScroll: true });
+  } else if (state.view === 'game' && state.completionOpen) {
     root.querySelector('[data-action="dismiss-completion"]')?.focus({ preventScroll: true });
   } else if (state.view === 'game' && Number.isInteger(state.selectedCell)) {
     root.querySelector(`[data-cell="${state.selectedCell}"]`)?.focus({ preventScroll: true });

@@ -15,10 +15,12 @@ async function app({ lock = true, loadError = false, delayed = false, completed 
   const root = { addEventListener(name, fn) { events[`root:${name}`] = fn; }, querySelector() { return null; } };
   const context = vm.createContext({
     URL, console, setInterval, clearInterval, performance,
-    document: { querySelector: () => root, visibilityState: 'hidden', addEventListener: (name, fn) => { events[name] = fn; } },
+    document: { documentElement: { dataset: {} }, querySelector: selector => selector === '#app' ? root : null, visibilityState: 'hidden', addEventListener: (name, fn) => { events[name] = fn; } },
     window: { addEventListener: (name, fn) => { events[name] = fn; } },
     navigator: { locks: { request: async (_name, _options, callback) => callback(lock ? {} : null) } },
     DEFAULT_SETTINGS: {}, DIFFICULTIES: ['初級'], emptyStats: () => ({ totalClears: 0 }),
+    THEMES: [{ id: 'classic', paper: '#f7f5ef' }, { id: 'night', paper: '#18232f' }],
+    getKeypadState: () => [],
     loadApp: () => loadError ? Promise.reject(new Error('unreadable')) : delayed ? new Promise(resolve => { finishLoad = resolve; }) : Promise.resolve(loaded),
     saveApp: async (data) => { writes.push(data); },
     renderApp() {}, getDisplayedCandidates() {}, getConflicts() {}, isComplete: game => Boolean(game?.completed),
@@ -63,6 +65,25 @@ test('saved completed games reopen on the board with their result overlay', asyn
   assert.equal(vm.runInContext('state.view', context), 'game');
   assert.equal(vm.runInContext('state.completionOpen', context), true);
   assert.equal(vm.runInContext('currentElapsed()', context), 83);
+});
+
+test('theme switching updates the whole page and saves without changing the game or statistics', async () => {
+  const { context, events, writes } = await app();
+  events['root:click']({ target: { closest: selector => selector === '[data-action]' ? { dataset: { action: 'set-theme', theme: 'night' } } : null } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(vm.runInContext('document.documentElement.dataset.theme', context), 'night');
+  assert.equal(writes.at(-1).settings.theme, 'night');
+  assert.equal(writes.at(-1).stats.totalClears, 7);
+  assert.equal(writes.at(-1).currentGame, null);
+});
+
+test('keyboard input cannot bypass an unavailable memo key', async () => {
+  const { context, events } = await app();
+  context.getKeypadState = () => [{ digit: 9, disabled: true }];
+  context.transact = () => { throw new Error('Unavailable memo must not transact'); };
+  vm.runInContext(`state.view = 'game'; state.currentGame = { elapsedTime: 0 }; state.inputMode = 'memo';`, context);
+  events['root:keydown']({ key: '9', preventDefault() {} });
+  assert.equal(vm.runInContext('state.currentGame.elapsedTime', context), 0);
 });
 
 test('initialized owner persists loaded statistics on close', async () => {

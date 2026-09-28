@@ -7,6 +7,17 @@ import { createGame, transact, undo, redo } from '../js/game/engine.js';
 const digits = '530070000600195000098000060800060003400803001700020006060000280000419005000080079';
 const puzzle = { puzzleId: 'sample_1', difficulty: '初級', puzzle: digits };
 
+test('themes persist and existing or invalid settings fall back without losing progress', async () => {
+  const game = createGame({ ...puzzle, puzzle: '0'.repeat(81) });
+  for (const theme of ['classic', 'forest', 'rose', 'night', undefined, 'unknown']) {
+    await saveApp({ currentGame: game, stats: emptyStats(), settings: { autoCandidates: false, theme } });
+    const saved = await loadApp();
+    assert.equal(saved.settings.theme, theme && theme !== 'unknown' ? theme : 'classic');
+    assert.equal(saved.settings.autoCandidates, false);
+    assert.deepEqual(saved.currentGame, game);
+  }
+});
+
 test('dataset rejects conflicting givens, malformed boards and absent tiers', () => {
   assert.equal(isValidPuzzle(puzzle), true);
   assert.equal(isValidPuzzle({ ...puzzle, puzzle: '550' + digits.slice(3) }), false);

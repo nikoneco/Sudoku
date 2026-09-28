@@ -1,6 +1,6 @@
-import { DIFFICULTIES } from '../config.js';
+import { DIFFICULTIES, THEMES } from '../config.js';
 
-export const DEFAULT_SETTINGS = Object.freeze({ autoCandidates: true });
+export const DEFAULT_SETTINGS = Object.freeze({ autoCandidates: true, theme: 'classic' });
 export const emptyStats = () => ({ clearedIds: [], byDifficulty: {}, totalClears: 0 });
 let database;
 let writeQueue = Promise.resolve();
@@ -66,7 +66,9 @@ export async function loadApp() {
   const saved = await readValue('app');
   if (!saved) return { currentGame: null, stats: emptyStats(), settings: { ...DEFAULT_SETTINGS } };
   if (!validateGame(saved.currentGame)) throw new Error('途中データを読み込めませんでした。保存データは保持されています。');
-  return { currentGame: saved.currentGame, stats: saved.stats || emptyStats(), settings: { ...DEFAULT_SETTINGS, ...saved.settings } };
+  const settings = { ...DEFAULT_SETTINGS, ...saved.settings };
+  if (!THEMES.some(theme => theme.id === settings.theme)) settings.theme = DEFAULT_SETTINGS.theme;
+  return { currentGame: saved.currentGame, stats: saved.stats || emptyStats(), settings };
 }
 
 export function saveApp(app) {
