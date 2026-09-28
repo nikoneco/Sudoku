@@ -1,0 +1,7 @@
+node_modules/
+.local/
+.clasp.json
+.clasprc.json
+LOCAL_URLS.md
+playwright-report/
+test-results/

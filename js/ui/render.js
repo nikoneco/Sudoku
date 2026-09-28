@@ -1,0 +1,207 @@
+import { icon } from './icons.js';
+
+const html = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[char]));
+
+export function formatDuration(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainder = total % 60;
+  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}` : `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+}
+
+function notices(state) {
+  const items = [];
+  if (state.sessionBlocked) {
+    items.push(`<div class="notice notice--sync" role="alert"><span>別の画面で使用中です。そちらを閉じてから再読み込みしてください。</span><button class="notice-button" data-action="reload">再読み込み</button></div>`);
+  }
+  if (state.loadError) {
+    items.push(`<div class="notice" role="alert"><span>保存内容を読み込めませんでした。保存データは保持されています。</span><button class="notice-button" data-action="retry-load">再試行</button></div>`);
+  }
+  if (state.saveError) {
+    items.push(`<div class="notice" role="alert"><span>保存に失敗しました。現在の内容はこの画面に残っています。</span><button class="notice-button" data-action="retry-save">再試行</button></div>`);
+  }
+  if (state.syncError) {
+    items.push(`<div class="notice notice--sync" role="status"><span>問題を更新できませんでした。保存済みの問題は使えます。</span><button class="notice-button" data-action="retry-sync">再試行</button></div>`);
+  }
+  if (state.uiError) {
+    items.push(`<div class="notice" role="alert"><span>${html(state.uiError)}</span><button class="notice-button" data-action="dismiss-error" aria-label="通知を閉じる">閉じる</button></div>`);
+  }
+  if (state.updateWorker) {
+    items.push(`<div class="notice notice--update" role="status"><span>アプリの更新があります。</span><button class="notice-button" data-action="apply-update">更新</button></div>`);
+  }
+  return items.length ? `<aside class="app-notices" aria-label="通知">${items.join('')}</aside>` : '';
+}
+
+function pageHeader(title, backAction = 'back', right = '') {
+  return `<header class="screen-header">
+    <div class="header-start"><button class="header-button header-button--back" data-action="${html(backAction)}" aria-label="戻る">${icon('back')}<span>戻る</span></button></div>
+    <h1 class="screen-heading">${html(title)}</h1>
+    <div class="header-end">${right}</div>
+  </header>`;
+}
+
+function homeView(state, difficulties, complete) {
+  const current = state.currentGame;
+  const canResume = current && !complete(current);
+  const difficultyRows = difficulties.map((difficulty, index) => {
+    const dots = Array.from({ length: difficulties.length }, (_, dot) => `<i${dot <= index ? ' class="is-filled"' : ''}></i>`).join('');
+    return `<button class="level-row" data-action="new-game" data-difficulty="${html(difficulty)}"${state.busy || !state.storageReady || state.sessionBlocked ? ' disabled' : ''}>
+      <span class="level-name">${html(difficulty)}</span>
+      <span class="difficulty-dots" aria-hidden="true">${dots}</span>
+      ${icon('chevron')}
+    </button>`;
+  }).join('');
+  return `<main class="screen home-screen">
+    ${notices(state)}
+    <header class="home-header"><h1 class="brand">SUDOKU</h1></header>
+    <div class="home-content">
+      ${canResume ? `<button class="resume-card" data-action="resume">
+        <span class="resume-title">つづきから</span>
+        <span class="resume-meta"><strong>${html(current.difficulty)}</strong><span>${formatDuration(current.elapsedTime)}</span></span>
+        ${icon('chevron')}
+      </button>` : ''}
+      <section class="level-section" aria-labelledby="new-puzzle-title">
+        <h2 class="section-title" id="new-puzzle-title">新しい問題</h2>
+        <div class="level-list">${difficultyRows}</div>
+      </section>
+      ${state.busy ? '<p class="busy-indicator" role="status"><span class="loading-mark" aria-hidden="true"></span>問題を準備しています</p>' : ''}
+    </div>
+    <nav class="home-nav" aria-label="メニュー">
+      <button class="nav-action" data-action="settings"${!state.storageReady || state.sessionBlocked ? ' disabled' : ''}>${icon('settings')}<span>設定</span></button>
+      <button class="nav-action" data-action="stats"${!state.storageReady || state.sessionBlocked ? ' disabled' : ''}>${icon('stats')}<span>成績</span></button>
+    </nav>
+  </main>`;
+}
+
+function boxOf(index) {
+  return Math.floor(Math.floor(index / 9) / 3) * 3 + Math.floor((index % 9) / 3);
+}
+
+function gameView(state, difficultyList, { displayed, conflicts, elapsed }) {
+  const game = state.currentGame;
+  const selected = Number.isInteger(state.selectedCell) ? state.selectedCell : 0;
+  const selectedValue = game.currentBoard[selected] || 0;
+  const selectedRow = Math.floor(selected / 9);
+  const selectedCol = selected % 9;
+  const selectedBox = boxOf(selected);
+  const conflictSet = new Set(conflicts(game.currentBoard));
+  const cells = game.currentBoard.map((value, index) => {
+    const row = Math.floor(index / 9);
+    const col = index % 9;
+    const isGiven = game.initialBoard[index] !== 0;
+    const notes = value ? [] : displayed(game, index, state.settings.autoCandidates);
+    const includedMask = game.manualIncludedCandidates[index] || 0;
+    const classes = ['cell', isGiven ? 'given' : 'editable'];
+    if (row === selectedRow || col === selectedCol || boxOf(index) === selectedBox) classes.push('related');
+    if (selectedValue && value === selectedValue) classes.push('same-number');
+    if (index === selected) classes.push('selected');
+    if (conflictSet.has(index)) classes.push('conflict');
+    const noteGrid = notes.map((digit) => `<span class="cell-note${includedMask & (1 << (digit - 1)) ? ' manual' : ''}" style="grid-column:${((digit - 1) % 3) + 1};grid-row:${Math.floor((digit - 1) / 3) + 1}">${digit}</span>`).join('');
+    const display = value ? `<span class="cell-value">${value}</span>` : (notes.length ? `<span class="cell-notes" aria-hidden="true">${noteGrid}</span>` : '');
+    const accessibleValue = value ? `数字 ${value}` : (notes.length ? `候補 ${notes.join('、')}` : '空欄');
+    const accessibleFlags = [isGiven ? '固定' : '入力可能', conflictSet.has(index) ? '衝突' : ''].filter(Boolean).join('、');
+    return `<button class="${classes.join(' ')}" role="gridcell" aria-selected="${index === selected}" aria-label="${row + 1}行${col + 1}列、${accessibleValue}${accessibleFlags ? `、${accessibleFlags}` : ''}" data-cell="${index}">${display}</button>`;
+  }).join('');
+  const digits = [1, 3, 5, 7, 9].map((digit) => `<button class="number-key" data-action="digit" data-digit="${digit}" aria-label="${digit}">${digit}</button>`).join('');
+  const evens = [2, 4, 6, 8].map((digit) => `<button class="number-key" data-action="digit" data-digit="${digit}" aria-label="${digit}">${digit}</button>`).join('');
+  const modeMemo = state.inputMode === 'memo';
+  const difficulty = difficultyList.includes(game.difficulty) ? game.difficulty : game.difficulty;
+  const canClearNotes = modeMemo && !game.currentBoard[selected];
+  return `<main class="screen game-screen${modeMemo ? ' memo-mode' : ''}">
+    ${notices(state)}
+    <header class="screen-header game-header">
+      <div class="header-start"><button class="header-button header-button--back" data-action="home" aria-label="ホームへ戻る">${icon('back')}<span>ホーム</span></button></div>
+      <div class="brand" aria-label="SUDOKU">SUDOKU</div>
+      <div class="header-end"><button class="header-button header-button--settings" data-action="settings" aria-label="設定を開く">${icon('settings')}</button></div>
+    </header>
+    <div class="game-meta"><span class="game-difficulty">${html(difficulty)}</span><time class="game-timer" aria-label="経過時間">${formatDuration(elapsed)}</time></div>
+    <section class="board" role="grid" aria-label="数独盤面">${cells}</section>
+    <section class="entry-panel" aria-label="入力">
+      <div class="entry-head">
+        <span class="mode-label${modeMemo ? ' memo' : ''}" aria-live="polite"><i class="mode-dot"></i>${modeMemo ? '候補メモ' : '数字入力'}</span>
+        ${canClearNotes ? '<button class="clear-notes" data-action="clear-notes">候補を消去</button>' : ''}
+      </div>
+      <div class="number-pad" aria-label="数字キー">
+        <div class="number-row">${digits}</div>
+        <div class="number-row number-row--even">${evens}</div>
+      </div>
+      <div class="utility-row" aria-label="操作">
+        <button class="utility-button" data-action="undo"${game.undoStack.length ? '' : ' disabled'} aria-label="元に戻す">${icon('undo')}<span>Undo</span></button>
+        <button class="utility-button" data-action="redo"${game.redoStack.length ? '' : ' disabled'} aria-label="やり直す">${icon('redo')}<span>Redo</span></button>
+        <button class="utility-button memo-action${modeMemo ? ' is-active' : ''}" data-action="toggle-mode" aria-pressed="${modeMemo}" aria-label="候補メモ${modeMemo ? '中' : 'に切り替え'}">${icon('memo')}<span>MEMO</span></button>
+        <button class="utility-button" data-action="delete" aria-label="${modeMemo && !game.currentBoard[selected] ? '選択セルの候補を消去' : '選択セルの数字を削除'}">${icon('delete')}<span>DEL</span></button>
+      </div>
+    </section>
+    <p class="sr-only" aria-live="polite" aria-atomic="true">${html(state.announce)}</p>
+  </main>`;
+}
+
+function settingsView(state) {
+  return `<main class="screen simple-screen">
+    ${notices(state)}
+    ${pageHeader('設定')}
+    <div class="simple-content">
+      <div class="settings-list">
+        <div class="setting-row">
+          <span class="setting-label" id="auto-candidates-label">自動候補表示</span>
+          <button class="switch" role="switch" aria-checked="${Boolean(state.settings.autoCandidates)}" aria-labelledby="auto-candidates-label" data-action="toggle-auto"></button>
+        </div>
+        <button class="settings-link" data-action="stats"><span>成績を見る</span>${icon('chevron')}</button>
+      </div>
+    </div>
+  </main>`;
+}
+
+function statsView(state, difficulties) {
+  const stats = state.stats;
+  const items = difficulties.map((difficulty) => {
+    const value = stats.byDifficulty?.[difficulty] || { clears: 0, bestTime: null };
+    const best = Number.isFinite(value.bestTime) ? formatDuration(value.bestTime) : '—';
+    return `<div class="stats-row"><span class="stats-difficulty">${html(difficulty)}</span><span class="stats-clears">${Math.max(0, Number(value.clears) || 0)} 問</span><span class="stats-best">${best}</span></div>`;
+  }).join('');
+  return `<main class="screen simple-screen">
+    ${notices(state)}
+    ${pageHeader('成績')}
+    <div class="simple-content">
+      <div class="stats-total"><span class="stats-total-label">クリア数</span><strong class="stats-total-value">${Math.max(0, Number(stats.totalClears) || 0)}</strong></div>
+      <div class="stats-list" aria-label="難易度別成績">${items}</div>
+    </div>
+  </main>`;
+}
+
+function completionView(state) {
+  const game = state.currentGame;
+  return `<main class="screen simple-screen">
+    ${notices(state)}
+    ${pageHeader('完成', 'home')}
+    <section class="completion-content">
+      <span class="completion-mark">${icon('check')}</span>
+      <h1 class="completion-title">完成</h1>
+      <time class="completion-time">${formatDuration(game.elapsedTime)}</time>
+      <span class="completion-difficulty">${html(game.difficulty)}</span>
+      <div class="completion-actions">
+        <button class="primary-action" data-action="new-same"${state.busy ? ' disabled' : ''}>もう一問</button>
+        <button class="secondary-action" data-action="home">ホームへ</button>
+      </div>
+    </section>
+  </main>`;
+}
+
+export function renderApp(root, state, difficulties, helpers) {
+  const previousScroll = root.scrollTop;
+  let view;
+  if (state.view === 'home') view = homeView(state, difficulties, helpers.isComplete);
+  else if (state.view === 'game' && state.currentGame) view = gameView(state, difficulties, helpers);
+  else if (state.view === 'settings') view = settingsView(state);
+  else if (state.view === 'stats') view = statsView(state, difficulties);
+  else if (state.view === 'completion' && state.currentGame) view = completionView(state);
+  else view = '<main class="screen loading-screen" aria-busy="true"><span class="brand">SUDOKU</span><span class="loading-mark" aria-hidden="true"></span></main>';
+  root.innerHTML = view;
+  root.scrollTop = previousScroll;
+  if (state.view === 'game' && Number.isInteger(state.selectedCell)) {
+    root.querySelector(`[data-cell="${state.selectedCell}"]`)?.focus({ preventScroll: true });
+  }
+}

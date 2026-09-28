@@ -1,0 +1,21 @@
+# Shared module contract
+
+## Game engine: js/game/engine.js
+- `createGame(puzzle)` returns JSON-serializable game. puzzle: `{puzzleId,difficulty,puzzle}` (81 digit string).
+- game: `{puzzleId,difficulty,initialBoard:number[81],currentBoard:number[81],manualIncludedCandidates:number[81],manualExcludedCandidates:number[81],sources:string[81],undoStack:[],redoStack:[],elapsedTime:0,startedAt:ISO,lastAutoFilled:number[]}`. Candidate arrays are bitmasks, digit d uses 1 << (d-1).
+- `transact(game, {type,cell,value})` returns a new game; type `set`, `toggleCandidate`, `delete`, `clearNotes`. Fixed cells are immutable. No-op returns same game. delete/clearNotes never run auto-fill. clearNotes clears includes and excludes every currently legal candidate for that cell (visible notes become empty in both display modes). toggleCandidate takes optional `autoCandidates` boolean default true, so it toggles the displayed candidate layer correctly. Any explicit exclusion change affects effective candidates. Settings toggles never transact.
+- `undo(game)`, `redo(game)` return new game or same for no-op. Snapshots cover board, candidate masks, sources; not timer. Cap history at 100 steps.
+- `getLegalCandidates(board,cell)`, `getEffectiveCandidates(game,cell)`, `getDisplayedCandidates(game,cell,autoCandidates=true)` return digit arrays. Effective = legal minus exclusions, regardless of includes/display.
+- `getConflicts(board)` returns array of cell indices; `isComplete(game)` returns boolean.
+- createGame performs initial naked-single closure, outside history. Generator ensures puzzles do not complete automatically at start.
+
+## Data modules owned by root
+`js/data/storage.js`: async `loadApp()` returns `{currentGame:null|game,stats,settings}`; async `saveApp({currentGame,stats,settings})` atomic; settings `{autoCandidates:true}`; stats `{clearedIds:[],byDifficulty:{},totalClears:0}`, each difficulty value `{clears:0,bestTime:null}`. Exports `recordClear(stats,game)` pure/idempotent per puzzle, `DEFAULT_SETTINGS`, `emptyStats()`.
+`js/data/puzzle-repository.js`: async `loadPuzzles()` returns puzzle[] using local IndexedDB + bundled fallback, async `syncPuzzles()` returns `{updated,count,offline?}`. `choosePuzzle(puzzles,difficulty,clearedIds=[],currentPuzzleId=null)` returns puzzle or throws. Exclude current if alternative exists, prefer uncleared.
+`js/config.js`: constants API_URL, DATASET_VERSION, DIFFICULTIES (Japanese four strings).
+
+## Generator
+`tools/generate-puzzles.mjs` CLI generate deterministic seeded unique puzzles and classify with techniques beyond singles. `tools/validate-puzzles.mjs` validates entire dataset. `data/puzzles.json`: `{schemaVersion:1,datasetVersion:1,puzzles:[{puzzleId,difficulty,puzzle}]}` NO solutions. `.local/puzzles-admin.json` full administrative records including solution, score, seed, generator_version, daily_eligible=false, validated=true, created_at. Need 500 per difficulty if feasible, initially generate 30 each then expand after checks. Classification must not use clue count alone. Tests `tests/generator.test.mjs`. Root writes tools/serve.mjs; generator owns other tools/*.mjs only after coordinating names.
+
+## UI owner
+index.html, css/, js/app.js, js/ui/, manifest.webmanifest, icons/, sw.js. Implements full flows with imported modules above. Relative URLs for /Sudoku/. Shell caching and explicit update prompt, no forced reload losing game. Safe-area, dynamic viewport, no zoom suppression outside board. Save state through serialized async storage writer; flush on visibility/pagehide; no timer while background/home/settings. Start new puzzle replaces current without confirmation. Completion stats idempotent. DEL allowed even with conflicts. Settings and stats accessible. Clear user-facing save/sync errors, cached gameplay works.
