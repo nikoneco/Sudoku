@@ -354,16 +354,41 @@ test("fixed puzzle digits ignore every editing action", () => {
 });
 
 test("delete never re-runs a naked-single closure", () => {
-  let game = blankGame();
-  game = exclude(game, 0, [2, 3, 4, 5, 6, 7, 8, 9]);
-  game = exclude(game, 1, [3, 4, 5, 6, 7, 8, 9]);
-  assert.deepEqual(game.currentBoard.slice(0, 2), [1, 2]);
+  const game = blankGame();
+  game.currentBoard = solvedGrid();
+  game.manualIncludedCandidates[0] = maskOf(9);
+  game.manualExcludedCandidates[0] = maskOf(1);
 
   const deleted = transact(game, { type: "delete", cell: 0 });
   assert.equal(deleted.currentBoard[0], 0);
   assert.equal(deleted.currentBoard[1], 2);
   assert.deepEqual(getEffectiveCandidates(deleted, 0), [1]);
   assert.deepEqual(deleted.lastAutoFilled, []);
+});
+
+test("deleting a digit resets only its notes and recomputes candidates with undo and redo", () => {
+  let game = createGame(puzzle({ 1: 4, 2: 5, 3: 6, 4: 7, 5: 8, 6: 9 }));
+  assert.deepEqual(getDisplayedCandidates(game, 0), [1, 2, 3]);
+  game = transact(game, { type: 'toggleCandidate', cell: 0, value: 4 });
+  assert.deepEqual(getDisplayedCandidates(game, 0), [1, 2, 3, 4]);
+  game = transact(game, { type: 'toggleCandidate', cell: 0, value: 2 });
+  game = transact(game, { type: 'toggleCandidate', cell: 80, value: 8, autoCandidates: false });
+  game = transact(game, { type: 'set', cell: 0, value: 5 });
+  const deleted = transact(game, { type: 'delete', cell: 0 });
+  assert.deepEqual(getDisplayedCandidates(deleted, 0), [1, 2, 3]);
+  assert.deepEqual(getDisplayedCandidates(deleted, 0, false), []);
+  assert.deepEqual(getEffectiveCandidates(deleted, 0), [1, 2, 3]);
+  assert.equal(deleted.manualIncludedCandidates[0], 0);
+  assert.equal(deleted.manualExcludedCandidates[0], 0);
+  assert.equal(deleted.manualIncludedCandidates[80], game.manualIncludedCandidates[80]);
+  assert.equal(deleted.manualExcludedCandidates[80], game.manualExcludedCandidates[80]);
+  assert.deepEqual(deleted.lastAutoFilled, []);
+  assert.equal(deleted.undoStack.length, game.undoStack.length + 1);
+  const restored = undo(deleted);
+  assert.deepEqual(restored.currentBoard, game.currentBoard);
+  assert.deepEqual(restored.manualIncludedCandidates, game.manualIncludedCandidates);
+  assert.deepEqual(restored.manualExcludedCandidates, game.manualExcludedCandidates);
+  assert.deepEqual(getDisplayedCandidates(redo(restored), 0), [1, 2, 3]);
 });
 
 test("clearNotes hides all currently legal candidates without auto-filling", () => {

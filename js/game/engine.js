@@ -301,6 +301,8 @@ export function transact(game, action) {
     if (draft.currentBoard[cell] === 0) return game;
     draft.currentBoard[cell] = 0;
     draft.sources[cell] = "";
+    draft.manualIncludedCandidates[cell] = 0;
+    draft.manualExcludedCandidates[cell] = 0;
     return finishTransaction(game, draft, false);
   }
 
