@@ -277,6 +277,17 @@ button:focus-visible {
   align-items: center;
   justify-content: center;
 }
+.home-header .brand { gap: 13px; }
+.brand-stamp {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--teal);
+  border-radius: 2px;
+  background: repeating-linear-gradient(to right, transparent 0 6px, var(--teal) 6px 7px), repeating-linear-gradient(to bottom, transparent 0 6px, var(--teal) 6px 7px);
+  color: var(--teal);
+  opacity: .75;
+  transform: rotate(-7deg);
+}
 .home-level {
   display: flex;
   min-height: 20px;
@@ -324,7 +335,19 @@ button:focus-visible {
 .resume-meta strong { color: var(--on-accent); font-size: 13px; font-weight: 600; }
 .resume-card .icon { color: var(--on-accent); }
 
-.level-section { margin-top: clamp(22px, 4.5vh, 38px); }
+.level-section { position: relative; margin-top: clamp(22px, 4.5vh, 38px); }
+.level-section::after {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  border-bottom: 1px solid var(--line-strong);
+  border-left: 1px solid var(--line-strong);
+  background: linear-gradient(45deg, var(--paper-deep) 49%, var(--paper) 50%);
+  content: "";
+  pointer-events: none;
+}
 .section-title {
   margin: 0 0 5px;
   padding: 0 2px 11px;
@@ -357,8 +380,8 @@ button:focus-visible {
 .level-row:disabled { opacity: .5; cursor: progress; }
 .level-name { font-size: 18px; font-weight: 520; letter-spacing: .02em; }
 .difficulty-dots { display: flex; align-items: center; gap: 6px; }
-.difficulty-dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--dot-empty); }
-.difficulty-dots i.is-filled { background: var(--teal); }
+.difficulty-dots i { width: 8px; height: 8px; border: 1px solid var(--dot-empty); border-radius: 1px; background: transparent; transform: rotate(-7deg); }
+.difficulty-dots i.is-filled { border-color: var(--teal); background: var(--teal); }
 .level-row .icon { justify-self: end; color: var(--ink-soft); }
 
 .home-nav {
@@ -616,7 +639,7 @@ button:focus-visible {
   transition: background-color .12s ease, color .12s ease;
 }
 .number-key:hover { background: var(--teal-mid); }
-.number-key:active { background: var(--teal-mid); }
+.number-key:active:not(:disabled) { background: var(--teal-mid); transform: translateY(1px) scale(.97); }
 .game-screen.memo-mode .number-key { border-color: var(--memo-pad-border); background: var(--memo-pad-bg); color: var(--memo-pad-ink); }
 .game-screen.memo-mode .number-key:hover { background: var(--memo-pad-hover); }
 .number-key.is-muted,
@@ -754,7 +777,10 @@ button:focus-visible {
   box-shadow: 0 8px 30px rgb(37 54 59 / 22%);
   text-align: center;
 }
-.clear-title { color: var(--teal); font-size: 29px; font-weight: 600; letter-spacing: .16em; }
+.clear-title { display: inline-block; padding: 3px 7px 3px 11px; border: 1px solid var(--teal); border-radius: 3px; color: var(--teal); font-size: 29px; font-weight: 600; letter-spacing: .16em; line-height: 1.1; transform: rotate(-3deg); }
+.clear-paper-pieces { position: absolute; inset: 12px 28px auto; height: 44px; pointer-events: none; }
+.clear-paper-pieces i { position: absolute; top: 4px; left: calc(8% + var(--piece) * 17%); width: 5px; height: 9px; border: 1px solid var(--teal); border-radius: 1px; background: var(--teal-mid); opacity: 0; }
+.clear-paper-pieces i:nth-child(2n) { width: 8px; height: 4px; border-color: var(--orange); background: var(--orange-soft); }
 .clear-result { display: flex; justify-content: center; gap: 14px; margin: 12px 0 0; font-size: 16px; font-variant-numeric: tabular-nums; }
 .clear-experience { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); align-items: center; gap: 11px; margin-top: 15px; }
 .experience-label { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; line-height: 1.3; }
@@ -857,4 +883,5 @@ button:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .number-key:active:not(:disabled) { transform: none; }
 }

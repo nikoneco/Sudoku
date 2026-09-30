@@ -78,6 +78,7 @@ async function app({
 } = {}) {
   const events = {};
   const writes = [];
+  const feedbackCalls = [];
   let finishLoad;
   const loadDeferred = deferred();
   const moduleDeferred = deferred();
@@ -110,6 +111,12 @@ async function app({
     awardExperience,
     getExperience,
     createExperienceAnimator: () => ({ sync() {}, cancel() {} }),
+    createPlayFeedback: () => ({
+      recordInput(...args) { feedbackCalls.push({ type: 'input', args }); },
+      celebrate() { feedbackCalls.push({ type: 'clear' }); },
+      sync() {},
+      cancel() { feedbackCalls.push({ type: 'cancel' }); },
+    }),
     queueMicrotask,
     document: {
       documentElement: { dataset: {} },
@@ -166,6 +173,7 @@ async function app({
     context,
     events,
     writes,
+    feedbackCalls,
     cloud,
     finish: async () => {
       finishLoad?.(saved);
@@ -378,6 +386,34 @@ test('keyboard input cannot bypass a number key already used nine times', async 
   vm.runInContext("state.view = 'game'; state.currentGame = { elapsedTime: 0 }; state.inputMode = 'number';", context);
   events['root:keydown']({ key: '9', preventDefault() {} });
   assert.equal(vm.runInContext('state.currentGame.elapsedTime', context), 0);
+});
+
+test('only accepted digit input requests ink feedback; editing history and completed reloads never celebrate', async () => {
+  const instance = await app({ loaded: {
+    currentGame: defaultGame(), stats: emptyStats(), scoreProfiles: emptyScoreProfiles(), settings: {},
+  } });
+  instance.evaluate("state.view = 'game'; state.selectedCell = 2;");
+  instance.evaluate('enterDigit(3)');
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'input').length, 0);
+  instance.context.transact = game => ({ ...game, currentBoard: [3] });
+  instance.evaluate('enterDigit(3)');
+  assert.deepEqual(instance.feedbackCalls.find(call => call.type === 'input').args.slice(2), [2, 3, 'number']);
+  instance.context.undo = game => ({ ...game, elapsedTime: 9 });
+  instance.click('undo');
+  instance.click('delete');
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'input').length, 1);
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'clear').length, 0);
+  const previous = instance.state().currentGame;
+  instance.context.finished = { ...previous, completed: true };
+  instance.evaluate('commitGame(finished, state.currentGame)');
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'clear').length, 1);
+  instance.click('dismiss-completion');
+  instance.click('settings');
+  instance.click('back');
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'clear').length, 1);
+  const restored = await app({ loaded: instance.writes.at(-1) });
+  restored.evaluate('resumeGame()');
+  assert.equal(restored.feedbackCalls.filter(call => call.type === 'clear').length, 0);
 });
 
 test('initialized owner persists loaded statistics and profiles on close', async () => {

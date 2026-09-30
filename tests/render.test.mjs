@@ -16,6 +16,8 @@ test('completion is a dismissible result over the full board, with input disable
   renderApp(root, state, ['中級'], helpers);
   assert.equal((root.innerHTML.match(/role="gridcell"/g) || []).length, 81);
   assert.match(root.innerHTML, /class="clear-title">CLEAR/);
+  assert.match(root.innerHTML, /class="clear-paper-pieces" aria-hidden="true"/);
+  assert.equal((root.innerHTML.match(/data-clear-piece /g) || []).length, 6);
   assert.match(root.innerHTML, /中級<\/span><time>01:23/);
   assert.match(root.innerHTML, /data-action="dismiss-completion"/);
   assert.match(root.innerHTML, /data-action="home">ホームへ/);
@@ -35,6 +37,7 @@ test('home shows the signed-in level and object title below SUDOKU only for an a
   const helpers = { isComplete: () => false };
 
   renderApp(root, state, [], helpers);
+  assert.match(root.innerHTML, /class="brand-stamp" aria-hidden="true"/);
   assert.match(root.innerHTML, /class="home-level"[^>]*>\s*<span>Lv1<\/span><span>米粒2粒分並み<\/span>/);
   state.account = null;
   renderApp(root, state, [], helpers);

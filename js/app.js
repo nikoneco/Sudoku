@@ -12,6 +12,7 @@ import { DEFAULT_SETTINGS, emptyStats, loadApp, recordClear, saveApp } from './d
 import { awardExperience, mergeStats, normalizeStats } from './data/stats.js';
 import { getExperience } from './data/experience.js';
 import { createExperienceAnimator } from './ui/experience-animation.js';
+import { createPlayFeedback } from './ui/play-feedback.js';
 import {
   emptyScoreProfiles,
   getGuestScoreCount,
@@ -27,6 +28,7 @@ import { getKeypadState } from './ui/keypad.js';
 
 const root = document.querySelector('#app');
 const experienceAnimator = createExperienceAnimator();
+const playFeedback = createPlayFeedback();
 const state = {
   view: 'loading',
   returnView: 'home',
@@ -183,6 +185,7 @@ function render() {
     elapsed: currentElapsed(),
   });
   experienceAnimator.sync(root, state.view === 'game' && state.completionOpen ? state.experienceGain : null);
+  playFeedback.sync(root, { visible: state.view === 'game' && document.visibilityState !== 'hidden', completionOpen: state.completionOpen });
 }
 
 function currentElapsed() {
@@ -277,6 +280,7 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
     const puzzle = choosePuzzle(puzzles, difficulty, state.stats.clearedIds, state.currentGame?.puzzleId || null);
     const game = createGame(puzzle);
     if (isComplete(game)) throw new Error('Puzzle auto-completed at start');
+    playFeedback.cancel();
     state.currentGame = game;
     state.completionOpen = false;
     state.completionExperience = null;
@@ -350,11 +354,14 @@ function finishIfComplete(game) {
   state.view = 'game';
   state.completionOpen = true;
   state.announce = '完成しました';
+  playFeedback.celebrate();
   return true;
 }
 
-function commitGame(next, previous) {
+function commitGame(next, previous, input = null) {
   if (next === previous) return false;
+  if (input) playFeedback.recordInput(previous, next, input.cell, input.digit, input.mode);
+  else playFeedback.cancel();
   state.currentGame = next;
   if (finishIfComplete(next)) {
     render();
@@ -378,7 +385,7 @@ function enterDigit(digit) {
   const next = state.inputMode === 'memo'
     ? transact(game, { type: 'toggleCandidate', cell, value: digit, autoCandidates: state.settings.autoCandidates })
     : transact(game, { type: 'set', cell, value: digit });
-  commitGame(next, previous);
+  commitGame(next, previous, { cell, digit, mode: state.inputMode });
 }
 
 function deleteSelected() {
@@ -787,6 +794,7 @@ root.addEventListener('keydown', (event) => {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
+    playFeedback.cancel();
     stopClock();
     void queueSave();
   } else {
@@ -802,6 +810,7 @@ window.addEventListener('online', () => {
 });
 
 window.addEventListener('pagehide', () => {
+  playFeedback.cancel();
   stopClock();
   void queueSave();
   void flushWrites();

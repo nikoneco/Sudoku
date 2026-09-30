@@ -60,7 +60,7 @@ function homeView(state, difficulties, complete) {
   }).join('');
   return `<main class="screen home-screen">
     ${notices(state)}
-    <header class="home-header"><h1 class="brand">SUDOKU</h1></header>
+    <header class="home-header"><h1 class="brand"><span class="brand-stamp" aria-hidden="true"></span>SUDOKU</h1></header>
     ${experience ? `<p class="home-level" aria-label="Lv${experience.level} ${html(getLevelTitle(experience.level))}"><span>Lv${experience.level}</span><span>${html(getLevelTitle(experience.level))}</span></p>` : ''}
     <div class="home-content">
       ${canResume ? `<button class="resume-card" data-action="resume">
@@ -105,7 +105,7 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
     if (selectedValue && value === selectedValue) classes.push('same-number');
     if (index === selected) classes.push('selected');
     if (conflictSet.has(index)) classes.push('conflict');
-    const noteGrid = notes.map((digit) => `<span class="cell-note${includedMask & (1 << (digit - 1)) ? ' manual' : ''}" style="grid-column:${((digit - 1) % 3) + 1};grid-row:${Math.floor((digit - 1) / 3) + 1}">${digit}</span>`).join('');
+    const noteGrid = notes.map((digit) => `<span class="cell-note${includedMask & (1 << (digit - 1)) ? ' manual' : ''}" data-note="${digit}" style="grid-column:${((digit - 1) % 3) + 1};grid-row:${Math.floor((digit - 1) / 3) + 1}">${digit}</span>`).join('');
     const display = value ? `<span class="cell-value">${value}</span>` : (notes.length ? `<span class="cell-notes" aria-hidden="true">${noteGrid}</span>` : '');
     const accessibleValue = value ? `数字 ${value}` : (notes.length ? `候補 ${notes.join('、')}` : '空欄');
     const accessibleFlags = [isGiven ? '固定' : '入力可能', conflictSet.has(index) ? '衝突' : ''].filter(Boolean).join('、');
@@ -230,6 +230,7 @@ function completionExperienceView(experience) {
 
 function completionOverlay(game, experience) {
   return `<section class="clear-overlay" role="status" aria-label="CLEAR">
+    <span class="clear-paper-pieces" aria-hidden="true">${Array.from({ length: 6 }, (_, index) => `<i data-clear-piece style="--piece:${index}"></i>`).join('')}</span>
     <button class="clear-close" data-action="dismiss-completion" aria-label="完成表示を閉じる">×</button>
     <strong class="clear-title">CLEAR</strong>
     <p class="clear-result"><span>${html(game.difficulty)}</span><time>${formatDuration(game.elapsedTime)}</time></p>
