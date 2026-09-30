@@ -7,6 +7,73 @@ import { createGame, transact, undo, redo } from '../js/game/engine.js';
 const digits = '530070000600195000098000060800060003400803001700020006060000280000419005000080079';
 const puzzle = { puzzleId: 'sample_1', difficulty: '初級', puzzle: digits };
 
+function deferred() {
+  let resolve;
+  const promise = new Promise(res => { resolve = res; });
+  return { promise, resolve };
+}
+
+function dataset(version, prefix) {
+  return {
+    schemaVersion: 1,
+    datasetVersion: version,
+    puzzles: ['初級', '中級', '上級', '超上級'].map((difficulty, index) => ({
+      ...puzzle, puzzleId: `${prefix}_${index}`, difficulty,
+    })),
+  };
+}
+
+test('concurrent startup loading and synchronization cannot overwrite the newer dataset', async t => {
+  await writeValue('dataset', null);
+  const repository = await import('../js/data/puzzle-repository.js?startup-single-flight');
+  const bundled = dataset(1, 'bundle');
+  const updated = dataset(2, 'remote');
+  const bundleResponse = deferred();
+  const bundleStarted = deferred();
+  let bundleRequests = 0;
+  let syncRequests = 0;
+  t.mock.method(globalThis, 'fetch', async url => {
+    if (String(url).endsWith('/data/puzzles.json')) {
+      bundleRequests += 1;
+      bundleStarted.resolve();
+      return bundleResponse.promise;
+    }
+    syncRequests += 1;
+    return { ok: true, json: async () => updated };
+  });
+
+  const catalog = repository.loadPuzzles();
+  const syncing = repository.syncPuzzles();
+  const additionalLoad = repository.loadPuzzles();
+  await bundleStarted.promise;
+  await new Promise(setImmediate);
+  assert.equal(bundleRequests, 1);
+  bundleResponse.resolve({ ok: true, json: async () => bundled });
+  await Promise.all([catalog, additionalLoad]);
+  assert.deepEqual(await syncing, { updated: true, count: 4 });
+  assert.equal(syncRequests, 1);
+  assert.deepEqual((await readValue('dataset')), updated);
+  assert.deepEqual(await repository.loadPuzzles(), updated.puzzles);
+});
+
+test('a failed shared initial load allows a later successful retry', async t => {
+  await writeValue('dataset', null);
+  const repository = await import('../js/data/puzzle-repository.js?initial-load-retry');
+  const recovered = dataset(1, 'recovered');
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    requests += 1;
+    return requests === 1 ? { ok: false } : { ok: true, json: async () => recovered };
+  });
+
+  const failed = await Promise.allSettled([repository.loadPuzzles(), repository.syncPuzzles()]);
+  assert.equal(requests, 1);
+  assert.deepEqual(failed.map(result => result.status), ['rejected', 'rejected']);
+  assert.deepEqual(await repository.loadPuzzles(), recovered.puzzles);
+  assert.equal(requests, 2);
+  assert.deepEqual(await readValue('dataset'), recovered);
+});
+
 test('themes persist and existing or invalid settings fall back without losing progress', async () => {
   const game = createGame({ ...puzzle, puzzle: '0'.repeat(81) });
   for (const theme of ['classic', 'forest', 'rose', 'night', undefined, 'unknown']) {
@@ -51,10 +118,12 @@ test('real game, candidate masks and both history stacks survive storage round t
   let game = transact(initial, { type: 'set', cell: 0, value: 1 });
   game = transact(game, { type: 'toggleCandidate', cell: 10, value: 2 });
   game = undo(game);
+  game = { ...game, elapsedTime: 83.625 };
   const stats = recordClear(emptyStats(), { puzzleId: 'previous', difficulty: '初級', elapsedTime: 30 });
   await saveApp({ currentGame: game, stats, settings: { autoCandidates: true } });
   const loaded = await loadApp();
   assert.deepEqual(loaded.currentGame, game);
+  assert.equal(loaded.currentGame.elapsedTime, 83.625);
   assert.deepEqual(redo(loaded.currentGame), redo(game));
   await saveApp({ ...loaded, currentGame: { ...initial, puzzleId: 'replacement' } });
   assert.equal((await loadApp()).stats.totalClears, 1);

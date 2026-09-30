@@ -26,19 +26,26 @@ export function validateDataset(data) {
 }
 
 let memory;
-export async function loadPuzzles() {
-  if (memory) return memory.puzzles;
-  let stored;
-  try { stored = await readValue('dataset'); } catch (error) { console.warn('問題キャッシュの読み込み失敗', error); }
-  if (stored) {
-    try { memory = validateDataset(stored); return memory.puzzles; } catch (error) { console.warn(error); }
-  }
-  const response = await fetch(new URL('../../data/puzzles.json', import.meta.url));
-  if (!response.ok) throw new Error('問題集を読み込めません。通信を確認して開き直してください。');
-  memory = validateDataset(await response.json());
-  // A playable bundled dataset should remain usable even when device storage is full.
-  try { await writeValue('dataset', memory); } catch (error) { console.warn('問題集を保存できませんでした。', error); }
-  return memory.puzzles;
+let loadInFlight;
+export function loadPuzzles() {
+  if (memory) return Promise.resolve(memory.puzzles);
+  if (loadInFlight) return loadInFlight;
+  // Startup catalog and synchronization share one load, so an older bundled
+  // response cannot arrive later and replace a synchronized dataset.
+  loadInFlight = (async () => {
+    let stored;
+    try { stored = await readValue('dataset'); } catch (error) { console.warn('問題キャッシュの読み込み失敗', error); }
+    if (stored) {
+      try { memory = validateDataset(stored); return memory.puzzles; } catch (error) { console.warn(error); }
+    }
+    const response = await fetch(new URL('../../data/puzzles.json', import.meta.url));
+    if (!response.ok) throw new Error('問題集を読み込めません。通信を確認して開き直してください。');
+    memory = validateDataset(await response.json());
+    // A playable bundled dataset should remain usable even when device storage is full.
+    try { await writeValue('dataset', memory); } catch (error) { console.warn('問題集を保存できませんでした。', error); }
+    return memory.puzzles;
+  })().finally(() => { loadInFlight = null; });
+  return loadInFlight;
 }
 
 let syncInFlight;

@@ -188,7 +188,8 @@ function render() {
 function currentElapsed() {
   if (!state.currentGame) return 0;
   if (clockStartedAt === null) return state.currentGame.elapsedTime || 0;
-  return clockBaseSeconds + Math.floor((Date.now() - clockStartedAt) / 1000);
+  // Keep partial seconds across checkpoints and pauses; renderers round for display.
+  return clockBaseSeconds + Math.max(0, Date.now() - clockStartedAt) / 1000;
 }
 
 function refreshTimerText() {
@@ -339,7 +340,7 @@ function registerCompletedGame(game, earnExperience = false) {
 
 function finishIfComplete(game) {
   if (!isComplete(game)) return false;
-  const elapsedTime = currentElapsed();
+  const elapsedTime = Math.floor(currentElapsed());
   stopClock(false);
   state.currentGame = registerCompletedGame({
     ...state.currentGame,

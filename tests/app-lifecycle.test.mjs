@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { DIFFICULTIES, THEMES } from '../js/config.js';
 import { awardExperience, emptyStats, mergeStats, normalizeStats, recordClear } from '../js/data/stats.js';
 import { getExperience } from '../js/data/experience.js';
+import { formatDuration } from '../js/ui/render.js';
 import { webcrypto } from 'node:crypto';
 import {
   emptyScoreProfiles,
@@ -197,6 +198,76 @@ async function waitFor(predicate, attempts = 100) {
   }
   assert.fail('Timed out waiting for app state');
 }
+
+function controlledClock(instance, initialTime = 0) {
+  let now = initialTime;
+  instance.context.Date = class extends Date { static now() { return now; } };
+  instance.context.setInterval = () => 0;
+  instance.evaluate("document.visibilityState = 'visible'");
+  return {
+    advance(milliseconds) { now += milliseconds; },
+    set(milliseconds) { now = milliseconds; },
+  };
+}
+
+test('partial play seconds survive pauses, checkpoints and reload before whole-second completion', async () => {
+  const instance = await app({ loaded: {
+    currentGame: { ...defaultGame(), elapsedTime: 0 },
+    stats: emptyStats(), scoreProfiles: emptyScoreProfiles(), settings: {},
+  } });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  const clock = controlledClock(instance);
+  instance.click('resume');
+  for (let segment = 0; segment < 4; segment += 1) {
+    clock.advance(750);
+    instance.click('settings');
+    clock.advance(10_000); // Settings time must not become play time.
+    instance.click('back');
+  }
+  assert.equal(instance.state().currentGame.elapsedTime, 3);
+
+  clock.advance(15_375);
+  instance.evaluate('saveClockSnapshot()');
+  assert.equal(instance.state().currentGame.elapsedTime, 18.375);
+  clock.advance(375);
+  instance.click('settings');
+  await instance.evaluate('queueSave()');
+  const saved = instance.writes.at(-1);
+  assert.equal(saved.currentGame.elapsedTime, 18.75);
+  assert.equal(formatDuration(saved.currentGame.elapsedTime), '00:18');
+
+  const restored = await app({ loaded: saved });
+  await waitFor(() => restored.state().cloud.status === 'signed-out');
+  const resumedClock = controlledClock(restored);
+  restored.click('resume');
+  resumedClock.advance(750);
+  assert.equal(restored.evaluate('currentElapsed()'), 19.5);
+  restored.evaluate(`
+    const previous = state.currentGame;
+    commitGame({ ...previous, completed: true }, previous);
+    finishIfComplete(state.currentGame);
+  `);
+  await restored.evaluate('queueSave()');
+  assert.equal(restored.state().currentGame.elapsedTime, 19);
+  assert.equal(restored.state().stats.records['in-progress'].elapsedTime, 19);
+  assert.equal(getExperience(restored.state().stats).totalExp, 20);
+  assert.equal(restored.evaluate('clockStartedAt'), null);
+});
+
+test('a backwards wall-clock adjustment cannot make saved play time negative', async () => {
+  const instance = await app({ loaded: {
+    currentGame: { ...defaultGame(), elapsedTime: 0.75 },
+    stats: emptyStats(), scoreProfiles: emptyScoreProfiles(), settings: {},
+  } });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  const clock = controlledClock(instance, 10_000);
+  instance.click('resume');
+  clock.set(5_000);
+  instance.click('settings');
+  await instance.evaluate('queueSave()');
+  assert.equal(instance.state().currentGame.elapsedTime, 0.75);
+  assert.equal(instance.writes.at(-1).currentGame.elapsedTime, 0.75);
+});
 
 test('blocked or unreadable sessions never replace saved data on hide/close', async () => {
   for (const options of [{ lock: false }, { loadError: true }, { delayed: true }]) {
