@@ -22,6 +22,15 @@ import {
   selectScoreProfile,
   updateProfileStats,
 } from './data/score-profiles.js';
+import {
+  applySettingsSync,
+  captureSettingsSync,
+  getProfileSettings,
+  getSettingsProfile,
+  normalizeSettingsProfiles,
+  selectSettingsProfile,
+  updateProfileSettings,
+} from './data/settings-profiles.js';
 import { choosePuzzle, loadPuzzles, syncPuzzles } from './data/puzzle-repository.js';
 import { formatDuration, renderApp } from './ui/render.js';
 import { getKeypadState } from './ui/keypad.js';
@@ -43,6 +52,7 @@ const state = {
   account: null,
   cloud: { status: 'loading', busy: false, error: '' },
   settings: { ...DEFAULT_SETTINGS },
+  settingsProfiles: normalizeSettingsProfiles(null),
   selectedCell: 0,
   inputMode: 'number',
   busy: false,
@@ -86,6 +96,7 @@ function snapshot() {
     stats: state.stats,
     scoreProfiles: state.scoreProfiles,
     settings: state.settings,
+    settingsProfiles: state.settingsProfiles,
   }));
 }
 
@@ -106,6 +117,8 @@ function activateScoreProfile(key, displayName) {
   const previousName = state.account?.uid === key ? state.account.displayName : '';
   state.scoreProfiles = selectScoreProfile(state.scoreProfiles, key, scorePuzzles);
   state.stats = getProfileStats(state.scoreProfiles, key);
+  state.settingsProfiles = selectSettingsProfile(state.settingsProfiles, key);
+  state.settings = getProfileSettings(state.settingsProfiles, key);
   state.account = key === 'guest'
     ? null
     : { uid: key, displayName: displayName || previousName || '保存済みアカウント' };
@@ -123,7 +136,7 @@ function cloudFailure(message) {
   state.cloud = {
     status: offline ? 'offline' : 'error',
     busy: false,
-    error: message || 'Google同期に接続できません。保存した成績はこの端末に残っています。',
+    error: message || 'Google同期に接続できません。成績と設定はこの端末に残っています。',
   };
   render();
 }
@@ -131,7 +144,17 @@ function cloudFailure(message) {
 function isCurrentCloudSession(uid, generation) {
   return authGeneration === generation
     && state.account?.uid === uid
-    && state.scoreProfiles.activeKey === uid;
+    && state.scoreProfiles.activeKey === uid
+    && state.settingsProfiles.activeKey === uid;
+}
+
+function changeSettings(patch) {
+  const key = state.settingsProfiles.activeKey;
+  state.settingsProfiles = updateProfileSettings(state.settingsProfiles, key, patch);
+  state.settings = getProfileSettings(state.settingsProfiles, key);
+  render();
+  void queueSave();
+  if (state.account?.uid) void requestScoreSync();
 }
 
 function updateCloudState(patch) {
@@ -278,7 +301,7 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
   try {
     const puzzles = await loadPuzzles();
     const puzzle = choosePuzzle(puzzles, difficulty, state.stats.clearedIds, state.currentGame?.puzzleId || null);
-    const game = createGame(puzzle);
+    const game = createGame(puzzle, { autoFill: state.settings.autoFill });
     if (isComplete(game)) throw new Error('Puzzle auto-completed at start');
     playFeedback.cancel();
     state.currentGame = game;
@@ -383,8 +406,8 @@ function enterDigit(digit) {
   if (getKeypadState(game, cell, state.inputMode, state.settings.autoCandidates).find(key => key.digit === digit)?.disabled) return;
   const previous = game;
   const next = state.inputMode === 'memo'
-    ? transact(game, { type: 'toggleCandidate', cell, value: digit, autoCandidates: state.settings.autoCandidates })
-    : transact(game, { type: 'set', cell, value: digit });
+    ? transact(game, { type: 'toggleCandidate', cell, value: digit, autoCandidates: state.settings.autoCandidates }, { autoFill: state.settings.autoFill })
+    : transact(game, { type: 'set', cell, value: digit }, { autoFill: state.settings.autoFill });
   commitGame(next, previous, { cell, digit, mode: state.inputMode });
 }
 
@@ -487,7 +510,7 @@ async function ensureFirebaseClient() {
     const client = await withTimeout(createFirebaseClient());
     if (!client || typeof client.onAuthStateChanged !== 'function'
       || typeof client.signIn !== 'function' || typeof client.signOut !== 'function'
-      || typeof client.syncStats !== 'function') {
+      || typeof client.syncStats !== 'function' || typeof client.syncSettings !== 'function') {
       throw new Error('Firebase adapter has an incomplete interface');
     }
     firebaseClient = client;
@@ -496,7 +519,7 @@ async function ensureFirebaseClient() {
   })().catch((error) => {
     firebaseClient = null;
     firebaseClientPromise = null;
-    cloudFailure('Google同期に接続できません。保存した成績はこの端末に残っています。');
+    cloudFailure('Google同期に接続できません。成績と設定はこの端末に残っています。');
     throw error;
   });
   return firebaseClientPromise;
@@ -532,6 +555,7 @@ function requestScoreSync() {
         const puzzles = await loadScorePuzzleCatalog();
         if (!isCurrentCloudSession(currentUid, generation)) continue;
         const revision = scoreRevision;
+        const settingsRequest = captureSettingsSync(state.settingsProfiles, currentUid);
         const localStats = structuredClone(normalizeStats(
           getProfileStats(state.scoreProfiles, currentUid),
           puzzles,
@@ -544,18 +568,27 @@ function requestScoreSync() {
           state.cloud = {
             status: 'error',
             busy: false,
-            error: '成績を端末に保存できません。保存後にもう一度同期してください。',
+            error: '成績と設定を端末に保存できません。保存後にもう一度同期してください。',
           };
           render();
           scoreSyncRequested = false;
           break;
         }
-        if (scoreRevision !== revision) {
+        if (scoreRevision !== revision || getSettingsProfile(state.settingsProfiles, currentUid).revision !== settingsRequest.revision) {
           scoreSyncRequested = true;
           continue;
         }
 
+        if (navigator.onLine === false) {
+          state.cloud = { status: 'offline', busy: false, error: '' };
+          render();
+          scoreSyncRequested = false;
+          break;
+        }
+
         const remoteStats = await firebaseClient.syncStats(currentUid, localStats);
+        if (!isCurrentCloudSession(currentUid, generation)) continue;
+        const remoteSettings = await firebaseClient.syncSettings(currentUid, settingsRequest.settings, settingsRequest.patch);
         if (!isCurrentCloudSession(currentUid, generation)) continue;
         const changedDuringRequest = scoreRevision !== revision;
         const normalizedRemote = normalizeStats(remoteStats, puzzles);
@@ -564,6 +597,9 @@ function requestScoreSync() {
           : normalizedRemote;
         state.scoreProfiles = updateProfileStats(state.scoreProfiles, currentUid, merged, puzzles);
         state.stats = getProfileStats(state.scoreProfiles, currentUid);
+        state.settingsProfiles = applySettingsSync(state.settingsProfiles, currentUid, remoteSettings, settingsRequest);
+        state.settings = getProfileSettings(state.settingsProfiles, currentUid);
+        const settingsStillPending = Object.keys(getSettingsProfile(state.settingsProfiles, currentUid).pending).length > 0;
         scoreRevision += 1;
         refreshGuestScoreCount();
         render();
@@ -575,20 +611,20 @@ function requestScoreSync() {
           state.cloud = {
             status: 'error',
             busy: false,
-            error: '同期した成績を端末に保存できませんでした。再試行してください。',
+            error: '同期した成績と設定を端末に保存できませんでした。再試行してください。',
           };
           render();
           scoreSyncRequested = false;
           break;
         }
-        if (changedDuringRequest) scoreSyncRequested = true;
+        if (changedDuringRequest || settingsStillPending) scoreSyncRequested = true;
         if (scoreSyncRequested) continue;
         state.cloud = { status: 'synced', busy: false, error: '' };
         render();
       } catch {
         if (!isCurrentCloudSession(currentUid, generation)) continue;
         scoreSyncRequested = false;
-        cloudFailure('成績をGoogleへ同期できませんでした。端末には保存されています。再試行できます。');
+        cloudFailure('成績と設定をGoogleへ同期できませんでした。端末には保存されています。再試行できます。');
         break;
       }
     }
@@ -730,14 +766,13 @@ root.addEventListener('click', (event) => {
   else if (action === 'undo' && state.currentGame) commitGame(undo(state.currentGame), state.currentGame);
   else if (action === 'redo' && state.currentGame) commitGame(redo(state.currentGame), state.currentGame);
   else if (action === 'toggle-auto') {
-    state.settings = { ...state.settings, autoCandidates: !state.settings.autoCandidates };
-    state.announce = state.settings.autoCandidates ? '自動候補表示をオンにしました' : '自動候補表示をオフにしました';
-    render();
-    void queueSave();
+    state.announce = state.settings.autoCandidates ? '自動候補表示をオフにしました' : '自動候補表示をオンにしました';
+    changeSettings({ autoCandidates: !state.settings.autoCandidates });
+  } else if (action === 'toggle-auto-fill') {
+    state.announce = state.settings.autoFill ? '自動入力をオフにしました' : '自動入力をオンにしました';
+    changeSettings({ autoFill: !state.settings.autoFill });
   } else if (action === 'set-theme' && THEMES.some(theme => theme.id === control.dataset.theme)) {
-    state.settings = { ...state.settings, theme: control.dataset.theme };
-    render();
-    void queueSave();
+    changeSettings({ theme: control.dataset.theme });
   } else if (action === 'retry-save') void queueSave();
   else if (action === 'retry-sync') void runSync();
   else if (action === 'sign-in') void signInToGoogle();
@@ -893,9 +928,11 @@ async function initialize() {
       ? null
       : { uid: cachedKey, displayName: '保存済みアカウント' };
     refreshGuestScoreCount();
-    state.settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
+    state.settingsProfiles = normalizeSettingsProfiles(saved.settingsProfiles, saved.settings, cachedKey);
+    state.settings = getProfileSettings(state.settingsProfiles);
     state.storageReady = true;
-    let initializationNeedsSave = JSON.stringify(saved.scoreProfiles || null) !== JSON.stringify(state.scoreProfiles);
+    let initializationNeedsSave = JSON.stringify(saved.scoreProfiles || null) !== JSON.stringify(state.scoreProfiles)
+      || JSON.stringify(saved.settingsProfiles || null) !== JSON.stringify(state.settingsProfiles);
     if (state.currentGame && isComplete(state.currentGame)) {
       const previousGame = state.currentGame;
       state.currentGame = registerCompletedGame(state.currentGame);

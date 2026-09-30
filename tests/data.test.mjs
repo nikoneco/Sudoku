@@ -4,6 +4,7 @@ import 'fake-indexeddb/auto';
 import { saveApp, loadApp, emptyStats, recordClear, writeValue, readValue } from '../js/data/storage.js';
 import { choosePuzzle, isValidPuzzle, validateDataset } from '../js/data/puzzle-repository.js';
 import { createGame, transact, undo, redo } from '../js/game/engine.js';
+import { normalizeSettingsProfiles, selectSettingsProfile, updateProfileSettings } from '../js/data/settings-profiles.js';
 const digits = '530070000600195000098000060800060003400803001700020006060000280000419005000080079';
 const puzzle = { puzzleId: 'sample_1', difficulty: '初級', puzzle: digits };
 
@@ -129,4 +130,28 @@ test('real game, candidate masks and both history stacks survive storage round t
   assert.equal((await loadApp()).stats.totalClears, 1);
   await assert.rejects(saveApp({ ...loaded, currentGame: { ...game, undoStack: [{}] } }));
   assert.equal((await loadApp()).currentGame.puzzleId, 'replacement');
+});
+
+test('legacy settings use strict booleans and preserve the selected account values without altering progress', async () => {
+  const game = createGame({ ...puzzle, puzzle: '0'.repeat(81) });
+  const scoreProfiles = { guest: emptyStats(), accounts: { A: emptyStats() }, activeKey: 'A' };
+  await writeValue('app', { currentGame: game, stats: emptyStats(), scoreProfiles, settings: { autoCandidates: false, autoFill: 'false', theme: 'night' } });
+  const loaded = await loadApp();
+  assert.deepEqual(loaded.currentGame, game);
+  assert.deepEqual(loaded.settings, { autoCandidates: false, autoFill: true, theme: 'night' });
+  assert.deepEqual(loaded.settingsProfiles.accounts.A.settings, loaded.settings);
+  assert.deepEqual(loaded.settingsProfiles.accounts.A.pending, {});
+});
+
+test('pending per-account settings revisions survive atomic app storage', async () => {
+  const game = createGame({ ...puzzle, puzzle: '0'.repeat(81) });
+  let settingsProfiles = normalizeSettingsProfiles(null, { theme: 'forest' });
+  settingsProfiles = selectSettingsProfile(settingsProfiles, 'A');
+  settingsProfiles = updateProfileSettings(settingsProfiles, 'A', { autoFill: false });
+  const scoreProfiles = { guest: emptyStats(), accounts: { A: emptyStats() }, activeKey: 'A' };
+  await saveApp({ currentGame: game, scoreProfiles, settingsProfiles, stats: emptyStats() });
+  const loaded = await loadApp();
+  assert.deepEqual(loaded.settingsProfiles, settingsProfiles);
+  assert.deepEqual(loaded.settings, { autoCandidates: true, autoFill: false, theme: 'forest' });
+  assert.deepEqual(loaded.currentGame, game);
 });

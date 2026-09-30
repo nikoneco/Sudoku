@@ -37,6 +37,12 @@ function assertSources(sources) {
   }
 }
 
+function assertAutoFill(autoFill) {
+  if (typeof autoFill !== "boolean") {
+    throw new TypeError("autoFill must be a boolean");
+  }
+}
+
 function assertGame(game) {
   if (!game || typeof game !== "object") throw new TypeError("game must be an object");
   assertBoard(game.initialBoard);
@@ -176,8 +182,9 @@ function runNakedSingleClosure(board, excludedMasks, sources) {
   return filled;
 }
 
-/** Create a serializable game and apply any initial naked-single chain. */
-export function createGame(puzzle) {
+/** Create a serializable game and optionally apply its initial naked-single chain. */
+export function createGame(puzzle, { autoFill = true } = {}) {
+  assertAutoFill(autoFill);
   if (!puzzle || typeof puzzle !== "object") throw new TypeError("puzzle must be an object");
   if (typeof puzzle.puzzleId !== "string" || puzzle.puzzleId.length === 0) {
     throw new TypeError("puzzleId must be a nonempty string");
@@ -194,7 +201,9 @@ export function createGame(puzzle) {
   const sources = initialBoard.map((value) => value === 0 ? "" : "given");
   const manualIncludedCandidates = Array(CELL_COUNT).fill(0);
   const manualExcludedCandidates = Array(CELL_COUNT).fill(0);
-  const lastAutoFilled = runNakedSingleClosure(currentBoard, manualExcludedCandidates, sources);
+  const lastAutoFilled = autoFill
+    ? runNakedSingleClosure(currentBoard, manualExcludedCandidates, sources)
+    : [];
 
   return {
     puzzleId: puzzle.puzzleId,
@@ -243,9 +252,10 @@ function finishTransaction(game, draft, autoFill) {
   };
 }
 
-/** Apply one user action and any resulting naked-single chain as one history step. */
-export function transact(game, action) {
+/** Apply one user action and any enabled naked-single chain as one history step. */
+export function transact(game, action, { autoFill = true } = {}) {
   assertGame(game);
+  assertAutoFill(autoFill);
   if (!action || typeof action !== "object") throw new TypeError("action must be an object");
   if (!["set", "toggleCandidate", "delete", "clearNotes"].includes(action.type)) {
     throw new TypeError("unsupported transaction type");
@@ -294,7 +304,7 @@ export function transact(game, action) {
     if (draft.currentBoard.filter(value => value === action.value).length >= 9) return game;
     draft.currentBoard[cell] = action.value;
     draft.sources[cell] = "manual";
-    return finishTransaction(game, draft, true);
+    return finishTransaction(game, draft, autoFill);
   }
 
   if (action.type === "delete") {
@@ -326,7 +336,7 @@ export function transact(game, action) {
     draft.manualExcludedCandidates[cell] &= ~digitBit;
   }
   const effectiveAfter = legal & ~draft.manualExcludedCandidates[cell];
-  return finishTransaction(game, draft, effectiveBefore !== effectiveAfter);
+  return finishTransaction(game, draft, autoFill && effectiveBefore !== effectiveAfter);
 }
 
 /** Restore the previous editable snapshot without changing timer fields. */

@@ -486,6 +486,84 @@ test("createGame performs the initial closure and completion checks conflicts", 
   assert.equal(isComplete(invalidComplete), false);
 });
 
+test("createGame can suppress initial closure without changing its default", () => {
+  const almostSolved = solvedGrid();
+  almostSolved[80] = 0;
+  const source = {
+    puzzleId: "initial-autofill-option",
+    difficulty: "初級",
+    puzzle: almostSolved.join(""),
+  };
+
+  const enabled = createGame(source);
+  const disabled = createGame(source, { autoFill: false });
+  assert.equal(enabled.currentBoard[80], solvedGrid()[80]);
+  assert.deepEqual(enabled.lastAutoFilled, [80]);
+  assert.equal(disabled.currentBoard[80], 0);
+  assert.deepEqual(disabled.lastAutoFilled, []);
+  assert.equal(Object.hasOwn(disabled, "autoFill"), false);
+  assert.deepEqual(disabled.undoStack, []);
+});
+
+test("autoFill applies per action to set and candidate closures and remains undoable", () => {
+  let game = blankGame();
+  game = exclude(game, 1, [3, 4, 5, 6, 7, 8, 9]); // Cell 1 has candidates 1 and 2.
+
+  const filledWithoutClosure = transact(game, { type: "set", cell: 0, value: 1 }, { autoFill: false });
+  assert.deepEqual(filledWithoutClosure.currentBoard.slice(0, 2), [1, 0]);
+  assert.deepEqual(filledWithoutClosure.lastAutoFilled, []);
+  assert.deepEqual(redo(undo(filledWithoutClosure)).currentBoard, filledWithoutClosure.currentBoard);
+
+  const filledOnNextAction = transact(filledWithoutClosure, { type: "set", cell: 80, value: 5 });
+  assert.deepEqual(filledOnNextAction.currentBoard.slice(0, 2), [1, 2]);
+  assert.deepEqual(filledOnNextAction.lastAutoFilled, [1]);
+  assert.deepEqual(undo(filledOnNextAction).currentBoard, filledWithoutClosure.currentBoard);
+
+  let candidates = blankGame();
+  candidates = exclude(candidates, 0, [2, 3, 4, 5, 6, 7, 8]);
+  candidates = transact(candidates, { type: "toggleCandidate", cell: 0, value: 9 }, { autoFill: false });
+  assert.equal(candidates.currentBoard[0], 0);
+  assert.deepEqual(getEffectiveCandidates(candidates, 0), [1]);
+  assert.deepEqual(candidates.lastAutoFilled, []);
+  assert.equal(undo(candidates).currentBoard[0], 0);
+  assert.equal(redo(undo(candidates)).currentBoard[0], 0);
+});
+
+test("autoFill is independent of autoCandidates and never changes DEL or MEMO behavior", () => {
+  let game = blankGame();
+  game = transact(game, {
+    type: "toggleCandidate",
+    cell: 0,
+    value: 1,
+    autoCandidates: false,
+  }, { autoFill: false });
+  assert.deepEqual(getDisplayedCandidates(game, 0, false), [1]);
+  assert.deepEqual(getEffectiveCandidates(game, 0), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.equal(game.currentBoard[0], 0);
+
+  const single = blankGame();
+  single.currentBoard = solvedGrid();
+  const deleted = transact(single, { type: "delete", cell: 0 }, { autoFill: true });
+  assert.equal(deleted.currentBoard[0], 0);
+  assert.deepEqual(deleted.lastAutoFilled, []);
+
+  const cleared = transact(game, { type: "clearNotes", cell: 0 }, { autoFill: true });
+  assert.equal(cleared.currentBoard[0], 0);
+  assert.deepEqual(cleared.lastAutoFilled, []);
+
+  const entered = transact(blankGame(), { type: "set", cell: 40, value: 5 });
+  const memo = transact(entered, { type: "toggleCandidate", cell: 40, value: 5 }, { autoFill: true });
+  assert.equal(memo.currentBoard[40], 0);
+  assert.deepEqual(memo.lastAutoFilled, []);
+});
+
+test("autoFill options reject non-boolean values even on no-op transactions", () => {
+  assert.throws(() => createGame(puzzle(), { autoFill: 1 }), TypeError);
+  const game = blankGame();
+  assert.throws(() => transact(game, { type: "delete", cell: 0 }, { autoFill: "yes" }), TypeError);
+  assert.throws(() => transact(game, { type: "set", cell: 0, value: 1 }, { autoFill: null }), TypeError);
+});
+
 test("isComplete rejects a conflict-free full board that changed a fixed given", () => {
   const solution = solvedGrid();
   const swapped = solution.map((digit) => digit === 1 ? 2 : digit === 2 ? 1 : digit);

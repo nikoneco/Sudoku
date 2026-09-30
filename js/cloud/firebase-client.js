@@ -2,6 +2,7 @@ import { FIREBASE_CONFIG } from '../firebase-config.js';
 import { DIFFICULTIES } from '../config.js';
 import { emptyStats, mergeStats, normalizeStats } from '../data/stats.js';
 import { isExperienceEventId } from '../data/experience.js';
+import { isValidSettings, normalizeSettings, validateSettingsPatch } from '../data/settings-profiles.js';
 
 const SDK_VERSION = '12.16.0';
 const MAX_ELAPSED_TIME = 31_536_000;
@@ -136,7 +137,7 @@ export async function createFirebaseClient({ sdkLoader = loadFirebaseSdk } = {})
   provider.setCustomParameters({ prompt: 'select_account' });
 
   function assertCurrentUser(uid) {
-    if (!uid || auth.currentUser?.uid !== uid) throw new Error('auth-changed');
+    if (!uid || uid === 'guest' || auth.currentUser?.uid !== uid) throw new Error('auth-changed');
   }
 
   async function readStats(uid, scoresRef, legacyRef, experienceRef) {
@@ -206,6 +207,28 @@ export async function createFirebaseClient({ sdkLoader = loadFirebaseSdk } = {})
     },
     signOut() {
       return authSdk.signOut(auth);
+    },
+    async syncSettings(uid, localSettings, pendingPatch = {}) {
+      assertCurrentUser(uid);
+      const local = normalizeSettings(localSettings);
+      const patch = validateSettingsPatch(pendingPatch);
+      const preferencesRef = firestoreSdk.doc(database, 'users', uid, 'preferences', 'app');
+      // The transaction rereads every retry so a stale device only replaces its edited fields.
+      const result = await firestoreSdk.runTransaction(database, async (transaction) => {
+        assertCurrentUser(uid);
+        const snapshot = await transaction.get(preferencesRef);
+        assertCurrentUser(uid);
+        const existing = snapshot.exists() ? snapshot.data() : null;
+        if (snapshot.exists() && !isValidSettings(existing)) throw new Error('invalid-remote-settings');
+        const settings = { ...(existing || local), ...patch };
+        if (!existing || Object.keys(patch).some(field => existing[field] !== settings[field])) {
+          assertCurrentUser(uid);
+          transaction.set(preferencesRef, settings);
+        }
+        return settings;
+      });
+      assertCurrentUser(uid);
+      return result;
     },
     async syncStats(uid, localStats) {
       assertCurrentUser(uid);

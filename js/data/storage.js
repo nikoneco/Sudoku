@@ -1,4 +1,4 @@
-import { DIFFICULTIES, THEMES } from '../config.js';
+import { DIFFICULTIES } from '../config.js';
 import { emptyStats, normalizeStats, recordClear } from './stats.js';
 import {
   emptyScoreProfiles,
@@ -8,7 +8,9 @@ import {
   updateProfileStats,
 } from './score-profiles.js';
 
-export const DEFAULT_SETTINGS = Object.freeze({ autoCandidates: true, theme: 'classic' });
+import { DEFAULT_SETTINGS, getProfileSettings, normalizeSettingsProfiles } from './settings-profiles.js';
+
+export { DEFAULT_SETTINGS };
 export { emptyStats, recordClear };
 let database;
 let writeQueue = Promise.resolve();
@@ -74,23 +76,25 @@ export async function loadApp() {
   const saved = await readValue('app');
   if (!saved) {
     const scoreProfiles = emptyScoreProfiles();
+    const settingsProfiles = normalizeSettingsProfiles(null);
     return {
       currentGame: null,
       stats: scoreProfiles.guest,
       scoreProfiles,
-      settings: { ...DEFAULT_SETTINGS },
+      settingsProfiles,
+      settings: getProfileSettings(settingsProfiles),
     };
   }
   if (!validateGame(saved.currentGame)) throw new Error('途中データを読み込めませんでした。保存データは保持されています。');
-  const settings = { ...DEFAULT_SETTINGS, ...saved.settings };
-  if (!THEMES.some(theme => theme.id === settings.theme)) settings.theme = DEFAULT_SETTINGS.theme;
   const legacyStats = normalizeStats(saved.stats || emptyStats());
   const scoreProfiles = normalizeScoreProfiles(saved.scoreProfiles, legacyStats);
+  const settingsProfiles = normalizeSettingsProfiles(saved.settingsProfiles, saved.settings, scoreProfiles.activeKey);
   return {
     currentGame: saved.currentGame,
     stats: getProfileStats(scoreProfiles),
     scoreProfiles,
-    settings,
+    settingsProfiles,
+    settings: getProfileSettings(settingsProfiles),
   };
 }
 
@@ -103,9 +107,12 @@ export function saveApp(app) {
   if (app.stats !== undefined) {
     scoreProfiles = updateProfileStats(scoreProfiles, activeKey, app.stats);
   }
+  const settingsProfiles = normalizeSettingsProfiles(app.settingsProfiles, app.settings, activeKey);
   return writeValue('app', {
     ...app,
     stats: scoreProfiles.guest,
     scoreProfiles,
+    settingsProfiles,
+    settings: getProfileSettings(settingsProfiles),
   });
 }

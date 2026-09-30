@@ -55,6 +55,21 @@ service cloud.firestore {
         && validDifficulty(data.difficulty);
     }
 
+    function validPreferences() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['autoCandidates', 'autoFill', 'theme'])
+        && data.keys().hasAll(['autoCandidates', 'autoFill', 'theme'])
+        && data.autoCandidates is bool
+        && data.autoFill is bool
+        && data.theme in ['classic', 'forest', 'rose', 'night'];
+    }
+
+    match /users/{userId}/preferences/app {
+      allow get: if owns(userId) && userId != 'guest';
+      allow create, update: if owns(userId) && userId != 'guest' && validPreferences();
+      allow delete, list: if false;
+    }
+
     match /users/{userId}/scores/{puzzleId} {
       allow get: if owns(userId) && validPuzzleId(puzzleId);
       allow list: if owns(userId);

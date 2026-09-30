@@ -83,10 +83,20 @@ test('account controls escape user names and keep guest import explicit', () => 
   assert.match(root.innerHTML, /&lt;img src=x&gt;/);
   assert.doesNotMatch(root.innerHTML, /<img src=x>/);
   assert.match(root.innerHTML, /data-action="import-guest-scores"/);
-  assert.match(root.innerHTML, /同期するのは成績だけ/);
+  assert.match(root.innerHTML, /成績と設定をGoogleで同期/);
+  assert.match(root.innerHTML, /途中の盤面はこの端末に保存/);
+  assert.match(root.innerHTML, /data-action="sync-scores"[^>]*>成績と設定を同期/);
   state.account = null;
   state.cloud.status = 'signed-out';
   renderApp(root, state, [], {});
   assert.match(root.innerHTML, /data-action="sign-in"/);
   assert.doesNotMatch(root.innerHTML, /data-action="import-guest-scores"/);
+});
+
+test('auto-fill and candidate-display settings expose independent accessible switches', () => {
+  const root = { scrollTop: 0, querySelector: () => null };
+  renderApp(root, { view: 'settings', settings: { theme: 'classic', autoCandidates: true, autoFill: false } }, [], {});
+  assert.match(root.innerHTML, /候補が1つのとき自動入力/);
+  assert.match(root.innerHTML, /role="switch" aria-checked="false" aria-labelledby="auto-fill-label" data-action="toggle-auto-fill"/);
+  assert.match(root.innerHTML, /role="switch" aria-checked="true" aria-labelledby="auto-candidates-label" data-action="toggle-auto"/);
 });

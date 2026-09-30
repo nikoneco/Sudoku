@@ -7,6 +7,7 @@ import { awardExperience, emptyStats, mergeStats, normalizeStats, recordClear } 
 import { getExperience } from '../js/data/experience.js';
 import { formatDuration } from '../js/ui/render.js';
 import { webcrypto } from 'node:crypto';
+import * as engine from '../js/game/engine.js';
 import {
   emptyScoreProfiles,
   getGuestScoreCount,
@@ -16,6 +17,10 @@ import {
   selectScoreProfile,
   updateProfileStats,
 } from '../js/data/score-profiles.js';
+import {
+  DEFAULT_SETTINGS, applySettingsSync, captureSettingsSync, getProfileSettings, getSettingsProfile,
+  normalizeSettingsProfiles, selectSettingsProfile, updateProfileSettings,
+} from '../js/data/settings-profiles.js';
 
 const source = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8')
   .replace(/^import\s[\s\S]*?from\s+'[^']+';\s*/gm, '')
@@ -29,10 +34,13 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function makeCloud({ initialUser = null, users = [], syncStats = async (_uid, stats) => stats } = {}) {
+function makeCloud({ initialUser = null, users = [], syncStats = async (_uid, stats) => stats,
+  syncSettings = null, settingsDocuments = {} } = {}) {
   let authListener = null;
   let signInIndex = 0;
   const calls = [];
+  const settingsCalls = [];
+  const preferences = new Map(Object.entries(settingsDocuments));
   const client = {
     onAuthStateChanged(listener) {
       authListener = listener;
@@ -52,10 +60,21 @@ function makeCloud({ initialUser = null, users = [], syncStats = async (_uid, st
       calls.push({ uid, stats: snapshot });
       return syncStats(uid, snapshot, calls.length);
     },
+    async syncSettings(uid, settings, patch) {
+      const local = structuredClone(settings);
+      const pending = structuredClone(patch);
+      settingsCalls.push({ uid, settings: local, patch: pending });
+      if (syncSettings) return syncSettings(uid, local, pending, settingsCalls.length);
+      const merged = { ...(preferences.get(uid) || local), ...pending };
+      preferences.set(uid, merged);
+      return structuredClone(merged);
+    },
   };
   return {
     client,
     calls,
+    settingsCalls,
+    preferences,
     emit(user) { authListener?.(user); },
   };
 }
@@ -75,6 +94,7 @@ async function app({
   cloudModuleError = false,
   cloudModulePending = false,
   catalogError = false,
+  online = true,
 } = {}) {
   const events = {};
   const writes = [];
@@ -126,10 +146,17 @@ async function app({
     },
     window: { addEventListener: (name, fn) => { events[name] = fn; } },
     navigator: {
-      onLine: true,
+      onLine: online,
       locks: { request: async (_name, _options, callback) => callback(lock ? {} : null) },
     },
-    DEFAULT_SETTINGS: { autoCandidates: true, theme: 'classic' },
+    DEFAULT_SETTINGS,
+    applySettingsSync,
+    captureSettingsSync,
+    getProfileSettings,
+    getSettingsProfile,
+    normalizeSettingsProfiles,
+    selectSettingsProfile,
+    updateProfileSettings,
     DIFFICULTIES,
     THEMES,
     emptyStats,
@@ -619,4 +646,208 @@ test('failed guest import saving preserves a concurrent clear through retry and 
   await waitFor(() => restored.state().cloud.status === 'synced');
   assert.deepEqual(restored.state().stats.clearedIds, ['guest-old', 'new-win']);
   assert.equal(restored.state().scoreProfiles.guest.totalClears, 0);
+});
+
+test('local settings switches and cloud hydration never alter the saved board or history', async () => {
+  const game = { ...defaultGame(), currentBoard: [0, 1], undoStack: [{ currentBoard: [0, 0] }], redoStack: [] };
+  const remote = { autoCandidates: false, autoFill: false, theme: 'night' };
+  const cloud = makeCloud({ users: [{ uid: 'A' }], settingsDocuments: { A: remote } });
+  const instance = await app({ cloud, loaded: { currentGame: game, stats: emptyStats(), scoreProfiles: emptyScoreProfiles(), settings: {} } });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  instance.context.transact = () => { throw new Error('Settings must not transact the board'); };
+  const before = JSON.stringify(instance.state().currentGame);
+  instance.click('toggle-auto-fill');
+  instance.click('toggle-auto');
+  instance.click('set-theme', { theme: 'rose' });
+  await instance.evaluate('flushWrites()');
+  assert.equal(instance.state().settings.autoFill, false);
+  assert.equal(instance.state().settings.autoCandidates, false);
+  assert.equal(JSON.stringify(instance.state().currentGame), before);
+  instance.click('sign-in');
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  assert.deepEqual(structuredClone(instance.state().settings), remote);
+  assert.deepEqual(cloud.settingsCalls[0].patch, {});
+  assert.equal(JSON.stringify(instance.state().currentGame), before);
+});
+
+test('new puzzles and eligible number and memo actions use the current auto-fill setting independently of display', async () => {
+  const instance = await app();
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  const creates = [];
+  const transactions = [];
+  instance.context.createGame = (puzzle, options) => { creates.push(structuredClone(options)); return defaultGame(); };
+  instance.context.transact = (game, action, options) => { transactions.push({ action: structuredClone(action), options: structuredClone(options) }); return game; };
+  instance.click('toggle-auto-fill');
+  instance.click('new-game', { difficulty: '初級' });
+  await waitFor(() => creates.length === 1);
+  assert.deepEqual(creates[0], { autoFill: false });
+  instance.evaluate('enterDigit(3)');
+  instance.click('toggle-mode');
+  instance.click('toggle-auto');
+  instance.evaluate('enterDigit(4)');
+  assert.deepEqual(transactions.map(item => item.options), [{ autoFill: false }, { autoFill: false }]);
+  assert.equal(transactions[1].action.autoCandidates, false);
+  instance.click('toggle-auto-fill');
+  instance.evaluate('enterDigit(5)');
+  assert.deepEqual(transactions[2].options, { autoFill: true });
+});
+
+test('the real engine starts without filling when off and uses the new option only on the next input', async () => {
+  const instance = await app();
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  Object.assign(instance.context, {
+    createGame: engine.createGame, transact: engine.transact,
+    isComplete: engine.isComplete, getConflicts: engine.getConflicts,
+    getDisplayedCandidates: engine.getDisplayedCandidates,
+    choosePuzzle: () => ({ puzzleId: 'single-toggle', difficulty: '初級', puzzle: '123456780' + '0'.repeat(72) }),
+  });
+  instance.click('toggle-auto-fill');
+  instance.click('new-game', { difficulty: '初級' });
+  await waitFor(() => instance.state().currentGame?.puzzleId === 'single-toggle');
+  assert.equal(instance.state().currentGame.currentBoard[8], 0);
+  instance.evaluate('state.selectedCell = 9; enterDigit(4)');
+  assert.equal(instance.state().currentGame.currentBoard[8], 0);
+  const before = JSON.stringify(instance.state().currentGame);
+  instance.click('toggle-auto-fill');
+  instance.click('toggle-auto');
+  assert.equal(JSON.stringify(instance.state().currentGame), before);
+  instance.evaluate('state.selectedCell = 10; enterDigit(5)');
+  assert.equal(instance.state().currentGame.currentBoard[8], 9);
+  assert.equal(instance.state().currentGame.undoStack.length, 2);
+});
+
+test('existing accounts hydrate remote settings while new UIDs seed from guest, never a previous account', async () => {
+  const guest = { autoCandidates: false, autoFill: true, theme: 'forest' };
+  const remoteA = { autoCandidates: true, autoFill: false, theme: 'night' };
+  const cloud = makeCloud({ initialUser: { uid: 'A' }, settingsDocuments: { A: remoteA } });
+  const instance = await app({ cloud, loaded: { currentGame: defaultGame(), stats: emptyStats(), scoreProfiles: emptyScoreProfiles(), settings: guest } });
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  assert.deepEqual(structuredClone(instance.state().settings), remoteA);
+  assert.deepEqual(cloud.settingsCalls[0].patch, {});
+  cloud.emit({ uid: 'B' });
+  await waitFor(() => instance.state().account?.uid === 'B' && instance.state().cloud.status === 'synced');
+  assert.deepEqual(cloud.preferences.get('B'), guest);
+  instance.click('toggle-auto-fill');
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  cloud.emit({ uid: 'A' });
+  assert.deepEqual(structuredClone(instance.state().settings), remoteA);
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  cloud.emit(null);
+  assert.deepEqual(structuredClone(instance.state().settings), guest);
+  assert.equal(instance.state().currentGame.puzzleId, 'in-progress');
+});
+
+test('offline settings changes are durable per field and retry after reload and online recovery', async () => {
+  const originalRemote = { autoCandidates: true, autoFill: true, theme: 'classic' };
+  const cloud = makeCloud({ initialUser: { uid: 'A' }, settingsDocuments: { A: originalRemote } });
+  const instance = await app({ cloud, online: false });
+  await waitFor(() => instance.state().cloud.status === 'offline');
+  instance.click('toggle-auto-fill');
+  instance.click('set-theme', { theme: 'rose' });
+  await instance.evaluate('flushWrites()');
+  assert.equal(cloud.settingsCalls.length, 0);
+  const saved = instance.writes.at(-1);
+  assert.deepEqual(Object.keys(saved.settingsProfiles.accounts.A.pending).sort(), ['autoFill', 'theme']);
+  const restored = await app({ cloud, loaded: saved, online: false });
+  await waitFor(() => restored.state().cloud.status === 'offline');
+  assert.equal(restored.state().settings.autoFill, false);
+  cloud.preferences.set('A', { ...originalRemote, autoCandidates: false });
+  restored.context.navigator.onLine = true;
+  restored.events.online();
+  await waitFor(() => restored.state().cloud.status === 'synced');
+  assert.deepEqual(cloud.settingsCalls.at(-1).patch, { autoFill: false, theme: 'rose' });
+  assert.deepEqual(structuredClone(restored.state().settings), { autoCandidates: false, autoFill: false, theme: 'rose' });
+  assert.deepEqual(structuredClone(restored.state().settingsProfiles.accounts.A.pending), {});
+});
+
+test('failed settings cloud writes retain pending fields through retry', async () => {
+  let fail = false;
+  const cloud = makeCloud({ initialUser: { uid: 'A' }, syncSettings: async (_uid, local, patch) => {
+    if (fail) throw new Error('cloud unavailable');
+    return { ...local, ...patch };
+  } });
+  const instance = await app({ cloud });
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  fail = true;
+  instance.click('toggle-auto-fill');
+  await waitFor(() => instance.state().cloud.status === 'error');
+  assert.ok(instance.state().settingsProfiles.accounts.A.pending.autoFill > 0);
+  assert.equal(instance.writes.at(-1).settings.autoFill, false);
+  fail = false;
+  instance.click('sync-scores');
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  assert.deepEqual(cloud.settingsCalls.at(-1).patch, { autoFill: false });
+  assert.deepEqual(structuredClone(instance.state().settingsProfiles.accounts.A.pending), {});
+});
+
+test('local durability failure blocks score and settings cloud calls and retains the edit', async () => {
+  const cloud = makeCloud({ initialUser: { uid: 'A' } });
+  const instance = await app({ cloud });
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  const settingsCalls = cloud.settingsCalls.length;
+  const scoreCalls = cloud.calls.length;
+  instance.context.saveApp = async () => { throw new Error('storage unavailable'); };
+  instance.click('toggle-auto-fill');
+  await waitFor(() => instance.state().cloud.status === 'error');
+  assert.equal(instance.state().saveError, true);
+  assert.equal(cloud.settingsCalls.length, settingsCalls);
+  assert.equal(cloud.calls.length, scoreCalls);
+  assert.ok(instance.state().settingsProfiles.accounts.A.pending.autoFill > 0);
+  instance.context.saveApp = async data => instance.writes.push(structuredClone(data));
+  instance.click('sync-scores');
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  assert.deepEqual(cloud.settingsCalls.at(-1).patch, { autoFill: false });
+});
+
+test('settings edits while syncStats is pending remain pending until a following request', async () => {
+  const gate = deferred();
+  const cloud = makeCloud({ initialUser: { uid: 'A' }, syncStats: (_uid, stats, call) => call === 1 ? gate.promise : stats });
+  const instance = await app({ cloud });
+  await waitFor(() => cloud.calls.length === 1);
+  instance.click('toggle-auto-fill');
+  instance.click('set-theme', { theme: 'night' });
+  await instance.evaluate('flushWrites()');
+  gate.resolve(emptyStats());
+  await waitFor(() => cloud.settingsCalls.length >= 2 && instance.state().cloud.status === 'synced');
+  assert.deepEqual(cloud.settingsCalls[0].patch, {});
+  assert.deepEqual(cloud.settingsCalls[1].patch, { autoFill: false, theme: 'night' });
+  assert.equal(instance.state().settings.autoFill, false);
+  assert.equal(instance.state().settings.theme, 'night');
+  assert.deepEqual(structuredClone(instance.state().settingsProfiles.accounts.A.pending), {});
+});
+
+test('same-field edits during syncSettings are never acknowledged by an older response', async () => {
+  const gate = deferred();
+  const cloud = makeCloud({ initialUser: { uid: 'A' }, syncSettings: (_uid, local, patch, call) => call === 2
+    ? gate.promise
+    : { ...local, ...patch } });
+  const instance = await app({ cloud });
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  instance.click('set-theme', { theme: 'night' });
+  await waitFor(() => cloud.settingsCalls.length === 2);
+  instance.click('set-theme', { theme: 'classic' });
+  instance.click('toggle-auto-fill');
+  await instance.evaluate('flushWrites()');
+  gate.resolve({ autoCandidates: false, autoFill: true, theme: 'night' });
+  await waitFor(() => cloud.settingsCalls.length === 3 && instance.state().cloud.status === 'synced');
+  assert.deepEqual(cloud.settingsCalls[2].patch, { theme: 'classic', autoFill: false });
+  assert.deepEqual(structuredClone(instance.state().settings), { autoCandidates: false, autoFill: false, theme: 'classic' });
+  assert.deepEqual(structuredClone(instance.state().settingsProfiles.accounts.A.pending), {});
+});
+
+test('account switches discard settings replies, including a return to the same UID in a new auth generation', async () => {
+  for (const nextUid of ['B', 'A']) {
+    const gate = deferred();
+    const cloud = makeCloud({ initialUser: { uid: 'A' }, syncSettings: (_uid, local, patch, call) => call === 1 ? gate.promise : { ...local, ...patch } });
+    const instance = await app({ cloud });
+    await waitFor(() => cloud.settingsCalls.length === 1);
+    cloud.emit({ uid: 'B' });
+    if (nextUid === 'A') cloud.emit({ uid: 'A' });
+    gate.resolve({ autoCandidates: false, autoFill: false, theme: 'night' });
+    await waitFor(() => instance.state().account?.uid === nextUid && instance.state().cloud.status === 'synced');
+    assert.equal(instance.state().settings.autoFill, true);
+    assert.equal(instance.state().settings.theme, 'classic');
+    assert.equal(instance.state().settingsProfiles.accounts.A.settings.theme, 'classic');
+    assert.ok(cloud.settingsCalls.slice(1).every(call => call.uid === nextUid));
+  }
 });

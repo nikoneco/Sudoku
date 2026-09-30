@@ -159,15 +159,15 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
 function accountSection(state) {
   const account = state.account;
   const cloud = state.cloud || { status: 'loading', busy: false };
-  const labels = { loading: 'ログインを準備中', 'signed-out': 'この端末に保存', syncing: '成績を同期中', synced: '成績を同期済み', error: '成績の同期を確認してください', offline: '端末に保存・オンラインで同期' };
+  const labels = { loading: 'ログインを準備中', 'signed-out': 'この端末に保存', syncing: '成績と設定を同期中', synced: '成績と設定を同期済み', error: '成績と設定の同期を確認してください', offline: '端末に保存・オンラインで同期' };
   const guestCount = state.guestScoreCount ?? state.scoreProfiles?.guest?.totalClears ?? 0;
   return `<section class="account-section" aria-label="Google連携">
     <h2 class="setting-label">Google連携</h2>
     <p class="account-name">${html(account ? account.displayName || 'Googleアカウント' : 'ログインなしで利用中')}</p>
     <p class="account-status" role="status">${html(cloud.error || labels[cloud.status] || '')}</p>
-    <p class="account-description">同期するのは成績だけです。盤面と設定はこの端末に保存します。</p>
+    <p class="account-description">成績と設定をGoogleで同期します。途中の盤面はこの端末に保存します。</p>
     <div class="account-actions">${account
-      ? `<button class="account-button" data-action="sync-scores"${cloud.busy ? ' disabled' : ''}>成績を同期</button><button class="account-button account-button--quiet" data-action="sign-out"${cloud.busy ? ' disabled' : ''}>ログアウト</button>`
+      ? `<button class="account-button" data-action="sync-scores"${cloud.busy ? ' disabled' : ''}>成績と設定を同期</button><button class="account-button account-button--quiet" data-action="sign-out"${cloud.busy ? ' disabled' : ''}>ログアウト</button>`
       : `<button class="account-button" data-action="sign-in"${cloud.busy || cloud.status === 'loading' ? ' disabled' : ''}>Googleでログイン</button>`}
     </div>
     ${account && guestCount > 0 ? `<button class="account-button account-import" data-action="import-guest-scores"${cloud.busy ? ' disabled' : ''}>この端末の成績 ${Math.max(0, Number(guestCount) || 0)}問を取り込む</button>` : ''}
@@ -187,6 +187,10 @@ function settingsView(state) {
         <div class="setting-row">
           <span class="setting-label" id="auto-candidates-label">自動候補表示</span>
           <button class="switch" role="switch" aria-checked="${Boolean(state.settings.autoCandidates)}" aria-labelledby="auto-candidates-label" data-action="toggle-auto"></button>
+        </div>
+        <div class="setting-row">
+          <span class="setting-label" id="auto-fill-label">候補が1つのとき自動入力</span>
+          <button class="switch" role="switch" aria-checked="${state.settings.autoFill !== false}" aria-labelledby="auto-fill-label" data-action="toggle-auto-fill"></button>
         </div>
         <section class="theme-setting" aria-labelledby="theme-setting-label">
           <h2 class="setting-label" id="theme-setting-label">配色テーマ</h2>
