@@ -8,6 +8,8 @@ import { getExperience } from '../js/data/experience.js';
 import { formatDuration } from '../js/ui/render.js';
 import { webcrypto } from 'node:crypto';
 import * as engine from '../js/game/engine.js';
+import { createAutoFillPresentation } from '../js/ui/auto-fill-presentation.js';
+import { getKeypadState } from '../js/ui/keypad.js';
 import {
   emptyScoreProfiles,
   getGuestScoreCount,
@@ -95,10 +97,15 @@ async function app({
   cloudModulePending = false,
   catalogError = false,
   online = true,
+  presentationClock = null,
+  useRealGame = false,
 } = {}) {
   const events = {};
   const writes = [];
   const feedbackCalls = [];
+  const experienceCalls = [];
+  const renders = [];
+  const motion = { matches: false, addEventListener(name, listener) { events[`motion:${name}`] = listener; } };
   let finishLoad;
   const loadDeferred = deferred();
   const moduleDeferred = deferred();
@@ -128,11 +135,15 @@ async function app({
     clearTimeout,
     performance,
     crypto: webcrypto,
+    matchMedia: () => motion,
     awardExperience,
     getExperience,
-    createExperienceAnimator: () => ({ sync() {}, cancel() {} }),
+    createExperienceAnimator: () => ({ sync(_root, gain) { experienceCalls.push(gain?.eventId || null); }, cancel() {} }),
+    createAutoFillPresentation: options => createAutoFillPresentation({ ...options,
+      ...(presentationClock?.options || {}), prefersReducedMotion: () => motion.matches }),
     createPlayFeedback: () => ({
       recordInput(...args) { feedbackCalls.push({ type: 'input', args }); },
+      recordInitial(...args) { feedbackCalls.push({ type: 'initial', args }); },
       celebrate() { feedbackCalls.push({ type: 'clear' }); },
       sync() {},
       cancel() { feedbackCalls.push({ type: 'cancel' }); },
@@ -182,7 +193,10 @@ async function app({
     loadPuzzles: () => catalogError ? Promise.reject(new Error('catalog offline')) : Promise.resolve([]),
     syncPuzzles: async () => ({}),
     formatDuration: value => String(value),
-    renderApp() {},
+    renderApp(_root, current, _difficulties, helpers) {
+      renders.push({ view: current.view, completionOpen: current.completionOpen,
+        projectedGame: structuredClone(helpers.projectedGame) });
+    },
     loadApp: () => loadError
       ? Promise.reject(new Error('unreadable'))
       : delayed
@@ -194,6 +208,7 @@ async function app({
       if (cloudModuleError) throw new Error('optional cloud import failed');
       return { createFirebaseClient: async () => cloud.client };
     },
+    ...(useRealGame ? { ...engine, getKeypadState } : {}),
   });
   vm.runInContext(source, context);
   const instance = {
@@ -201,6 +216,9 @@ async function app({
     events,
     writes,
     feedbackCalls,
+    experienceCalls,
+    renders,
+    motion,
     cloud,
     finish: async () => {
       finishLoad?.(saved);
@@ -244,6 +262,349 @@ function controlledClock(instance, initialTime = 0) {
     set(milliseconds) { now = milliseconds; },
   };
 }
+
+function presentationClock() {
+  let time = 0;
+  let serial = 0;
+  const jobs = new Map();
+  return { jobs,
+    options: {
+      now: () => time,
+      setTimeout(fn, delay) { const id = ++serial; jobs.set(id, { fn, at: time + delay }); return id; },
+      clearTimeout(id) { jobs.delete(id); },
+    },
+    advance(delta) {
+      const end = time + delta;
+      while (true) {
+        const entry = [...jobs].filter(([, job]) => job.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!entry) break;
+        time = entry[1].at; jobs.delete(entry[0]); entry[1].fn();
+      }
+      time = end;
+    },
+  };
+}
+
+function chainGame(completing = false) {
+  const game = engine.createGame({ puzzleId: completing ? 'completing-chain' : 'input-chain', difficulty: '初級', puzzle: '0'.repeat(81) });
+  if (completing) {
+    game.currentBoard = Array.from({ length: 81 }, (_, cell) => (Math.floor(cell / 9) * 3 + Math.floor(cell / 27) + cell % 9) % 9 + 1);
+    game.currentBoard.fill(0, 0, 9);
+    game.sources = game.currentBoard.map(digit => digit ? 'manual' : '');
+  } else {
+    for (let cell = 1; cell <= 3; cell += 1) {
+      game.manualExcludedCandidates[cell] = 511 & ~((1 << (cell - 1)) | (1 << cell));
+    }
+  }
+  game.elapsedTime = 83.75;
+  return game;
+}
+
+function realGameplay(instance) {
+  for (const name of ['createGame', 'transact', 'undo', 'redo', 'isComplete', 'getConflicts', 'getDisplayedCandidates']) {
+    instance.context[name] = engine[name];
+  }
+  instance.context.getKeypadState = getKeypadState;
+}
+
+function savedGame(game) {
+  return { currentGame: game, stats: emptyStats(), scoreProfiles: emptyScoreProfiles(), settings: {} };
+}
+
+test('input chains save their atomic result immediately while visible candidates arrive at 100/200ms', async () => {
+  const timing = presentationClock();
+  const previous = chainGame();
+  const instance = await app({ loaded: savedGame(previous), presentationClock: timing });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  realGameplay(instance);
+  controlledClock(instance);
+  instance.click('resume');
+  instance.click('digit', { digit: '1' });
+  await instance.evaluate('flushWrites()');
+  const canonical = instance.state().currentGame;
+  assert.deepEqual(canonical.currentBoard.slice(0, 4), [1, 2, 3, 4]);
+  assert.deepEqual(instance.writes.at(-1).currentGame.currentBoard, canonical.currentBoard);
+  assert.equal(canonical.undoStack.length, 1);
+  assert.deepEqual(instance.renders.at(-1).projectedGame.currentBoard.slice(0, 4), [1, 0, 0, 0]);
+  assert.deepEqual(engine.getDisplayedCandidates(instance.renders.at(-1).projectedGame, 8), [2, 3, 4, 5, 6, 7, 8, 9]);
+  timing.advance(99);
+  assert.equal(instance.renders.at(-1).projectedGame.currentBoard[1], 0);
+  timing.advance(1);
+  assert.deepEqual(instance.renders.at(-1).projectedGame.currentBoard.slice(0, 4), [1, 2, 0, 0]);
+  instance.evaluate("state.selectedCell = 8; render(); changeSettings({ theme: 'night' });");
+  await instance.evaluate('queueSave()');
+  timing.advance(100);
+  assert.deepEqual(instance.renders.at(-1).projectedGame.currentBoard.slice(0, 4), [1, 2, 3, 0]);
+  assert.deepEqual(engine.getDisplayedCandidates(instance.renders.at(-1).projectedGame, 8), [4, 5, 6, 7, 8, 9]);
+  instance.click('undo');
+  assert.deepEqual(instance.state().currentGame.currentBoard, previous.currentBoard);
+  timing.advance(2000);
+  assert.deepEqual(instance.renders.at(-1).projectedGame.currentBoard, previous.currentBoard);
+  instance.click('redo');
+  assert.deepEqual(instance.renders.at(-1).projectedGame.currentBoard, canonical.currentBoard);
+  assert.equal(instance.evaluate('autoFillPresentation.isActive()'), false);
+});
+
+test('completing chains persist one XP award and frozen time immediately, then show CLEAR after arrivals settle', async () => {
+  const timing = presentationClock();
+  const instance = await app({ loaded: savedGame(chainGame(true)), presentationClock: timing });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  realGameplay(instance);
+  const clock = controlledClock(instance);
+  instance.click('resume');
+  clock.advance(250);
+  instance.click('digit', { digit: '1' });
+  await instance.evaluate('flushWrites()');
+  const midChainSave = instance.writes.at(-1);
+  assert.equal(instance.state().currentGame.scoreRecorded, true);
+  assert.equal(instance.state().currentGame.elapsedTime, 84);
+  assert.equal(midChainSave.stats.records['completing-chain'].elapsedTime, 84);
+  assert.equal(getExperience(midChainSave.stats).totalExp, 20);
+  assert.equal(instance.state().completionOpen, false);
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'clear').length, 0);
+  assert.ok(instance.experienceCalls.every(event => event === null));
+  timing.advance(799);
+  assert.equal(instance.renders.at(-1).projectedGame.currentBoard[8], 0);
+  timing.advance(1);
+  assert.equal(instance.renders.at(-1).projectedGame.currentBoard[8], 9);
+  assert.equal(instance.state().completionOpen, false);
+  clock.advance(5000);
+  timing.advance(519);
+  assert.equal(instance.state().completionOpen, false);
+  timing.advance(1);
+  assert.equal(instance.state().completionOpen, true);
+  assert.equal(instance.state().currentGame.elapsedTime, 84);
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'clear').length, 1);
+  assert.ok(instance.experienceCalls.some(event => event === midChainSave.currentGame.experienceAward.eventId));
+  instance.evaluate('finishIfComplete(state.currentGame)');
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'clear').length, 1);
+  assert.equal(getExperience(instance.state().stats).totalExp, 20);
+  instance.click('dismiss-completion');
+  instance.evaluate('selectCell(8)');
+  timing.advance(2000);
+  assert.equal(instance.state().completionOpen, false);
+  assert.equal(instance.state().experienceGain, null);
+  const restored = await app({ loaded: midChainSave, presentationClock: presentationClock(), useRealGame: true });
+  assert.equal(restored.state().completionOpen, true);
+  assert.equal(restored.state().experienceGain, null);
+  assert.equal(restored.feedbackCalls.filter(call => call.type === 'clear').length, 0);
+  assert.equal(getExperience(restored.state().stats).totalExp, 20);
+});
+
+test('board no-ops, DEL, Undo/Redo, navigation and background settle chains without stale mutations or lost saves', async () => {
+  for (const action of ['no-op', 'unavailable', 'delete', 'undo', 'redo', 'settings', 'home', 'hidden', 'pagehide']) {
+    const timing = presentationClock();
+    const instance = await app({ loaded: savedGame(chainGame()), presentationClock: timing });
+    await waitFor(() => instance.state().cloud.status === 'signed-out');
+    realGameplay(instance);
+    controlledClock(instance);
+    instance.click('resume');
+    instance.click('digit', { digit: '1' });
+    const stale = [...timing.jobs.values()][0].fn;
+    timing.advance(50);
+    if (action === 'no-op') instance.click('digit', { digit: '1' });
+    else if (action === 'unavailable') {
+      instance.context.getKeypadState = () => [{ digit: 9, disabled: true }];
+      instance.click('digit', { digit: '9' });
+    } else if (action === 'hidden') {
+      instance.evaluate("document.visibilityState = 'hidden'");
+      instance.events.visibilitychange();
+    } else if (action === 'pagehide') instance.events.pagehide();
+    else instance.click(action);
+    assert.equal(instance.evaluate('autoFillPresentation.isActive()'), false, action);
+    const after = structuredClone(instance.state().currentGame.currentBoard);
+    stale();
+    timing.advance(2000);
+    await instance.evaluate('flushWrites()');
+    assert.deepEqual(instance.state().currentGame.currentBoard, after, action);
+    assert.deepEqual(instance.writes.at(-1).currentGame.currentBoard, after, action);
+    assert.deepEqual(instance.renders.at(-1).projectedGame.currentBoard, after, action);
+    assert.equal(instance.feedbackCalls.filter(call => call.type === 'clear').length, 0, action);
+  }
+});
+
+test('rapid new input edits the settled canonical board and owns a fresh Undo step', async () => {
+  const timing = presentationClock();
+  const instance = await app({ loaded: savedGame(chainGame()), presentationClock: timing });
+  realGameplay(instance);
+  controlledClock(instance);
+  instance.click('resume');
+  instance.click('digit', { digit: '1' });
+  timing.advance(50);
+  instance.evaluate('state.selectedCell = 10');
+  instance.click('digit', { digit: '5' });
+  assert.deepEqual(instance.renders.at(-1).projectedGame.currentBoard.slice(0, 4), [1, 2, 3, 4]);
+  assert.equal(instance.state().currentGame.currentBoard[10], 5);
+  assert.equal(instance.state().currentGame.undoStack.length, 2);
+  timing.advance(2000);
+  instance.click('undo');
+  assert.equal(instance.state().currentGame.currentBoard[10], 0);
+  assert.deepEqual(instance.state().currentGame.currentBoard.slice(0, 4), [1, 2, 3, 4]);
+});
+
+test('an eligible MEMO exclusion animates its naked-single closure and retains that one Undo transaction', async () => {
+  const timing = presentationClock();
+  const previous = chainGame();
+  previous.manualExcludedCandidates[0] = 511 & ~3;
+  const instance = await app({ loaded: savedGame(previous), presentationClock: timing });
+  realGameplay(instance);
+  controlledClock(instance);
+  instance.click('resume');
+  instance.click('toggle-mode');
+  instance.click('digit', { digit: '2' });
+  await instance.evaluate('flushWrites()');
+  assert.deepEqual(instance.state().currentGame.lastAutoFilled, [0, 1, 2, 3]);
+  assert.equal(instance.state().currentGame.undoStack.length, 1);
+  assert.equal(instance.state().currentGame.manualExcludedCandidates[0] & 2, 2);
+  assert.equal(instance.renders.at(-1).projectedGame.currentBoard[0], 0);
+  assert.deepEqual(engine.getDisplayedCandidates(instance.renders.at(-1).projectedGame, 0), [1]);
+  timing.advance(100);
+  assert.deepEqual(instance.renders.at(-1).projectedGame.currentBoard.slice(0, 4), [1, 0, 0, 0]);
+  timing.advance(100);
+  assert.deepEqual(instance.renders.at(-1).projectedGame.currentBoard.slice(0, 4), [1, 2, 0, 0]);
+  instance.click('undo');
+  assert.deepEqual(instance.state().currentGame.currentBoard, previous.currentBoard);
+  assert.equal(instance.state().currentGame.manualExcludedCandidates[0], previous.manualExcludedCandidates[0]);
+  timing.advance(2000);
+  assert.deepEqual(instance.renders.at(-1).projectedGame.currentBoard, previous.currentBoard);
+});
+
+test('new-game initial closure animates once, replacement and update settle safely, and resume never replays it', async () => {
+  const timing = presentationClock();
+  const instance = await app({ presentationClock: timing });
+  realGameplay(instance);
+  controlledClock(instance);
+  const initialPuzzle = { puzzleId: 'initial-chain', difficulty: '初級', puzzle: '012345678' + '0'.repeat(72) };
+  instance.context.choosePuzzle = () => initialPuzzle;
+  await instance.evaluate("startNewGame('初級')");
+  assert.deepEqual(instance.state().currentGame.lastAutoFilled, [0]);
+  assert.equal(instance.renders.at(-1).projectedGame.currentBoard[0], 0);
+  await instance.evaluate('flushWrites()');
+  const saved = instance.writes.at(-1);
+  assert.equal(saved.currentGame.currentBoard[0], 9);
+  timing.advance(100);
+  assert.equal(instance.renders.at(-1).projectedGame.currentBoard[0], 9);
+  instance.click('home');
+  instance.click('resume');
+  assert.equal(instance.evaluate('autoFillPresentation.isActive()'), false);
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'initial').length, 1);
+  const restored = await app({ loaded: saved, presentationClock: presentationClock() });
+  realGameplay(restored);
+  controlledClock(restored);
+  restored.click('resume');
+  assert.equal(restored.feedbackCalls.filter(call => call.type === 'initial').length, 0);
+  await instance.evaluate("startNewGame('初級')");
+  instance.evaluate('state.updateWorker = { postMessage() { pendingUpdateAllowed = true; } }; activateUpdate()');
+  await waitFor(() => instance.evaluate('pendingUpdateAllowed'));
+  assert.equal(instance.evaluate('autoFillPresentation.isActive()'), false);
+  assert.equal(instance.writes.at(-1).currentGame.currentBoard[0], 9);
+  timing.advance(2000);
+  assert.equal(instance.renders.at(-1).projectedGame.currentBoard[0], 9);
+});
+
+test('a successful cold new-game load settles an old completion before replacement without a stale CLEAR', async () => {
+  const timing = presentationClock();
+  const instance = await app({ loaded: savedGame(chainGame(true)), presentationClock: timing, useRealGame: true });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  controlledClock(instance);
+  const catalog = deferred();
+  instance.context.loadPuzzles = () => catalog.promise;
+  instance.context.choosePuzzle = () => ({ puzzleId: 'cold-replacement', difficulty: '初級', puzzle: '012345678' + '0'.repeat(72) });
+  const pendingStart = instance.evaluate("startNewGame('初級')");
+  assert.equal(instance.state().busy, true);
+  instance.click('resume');
+  instance.click('digit', { digit: '1' });
+  timing.advance(100);
+  assert.equal(instance.evaluate('completionPending'), true);
+  const stale = [...timing.jobs.values()][0].fn;
+  await instance.evaluate('flushWrites()');
+  assert.equal(instance.writes.at(-1).currentGame.scoreRecorded, true);
+  catalog.resolve([]);
+  await pendingStart;
+  assert.equal(instance.state().currentGame.puzzleId, 'cold-replacement');
+  assert.equal(instance.evaluate('completionPending'), false);
+  assert.equal(instance.state().completionOpen, false);
+  assert.equal(instance.state().announce, '');
+  assert.equal(instance.state().experienceGain, null);
+  stale();
+  timing.advance(620);
+  await instance.evaluate('flushWrites()');
+  assert.equal(engine.isComplete(instance.state().currentGame), false);
+  assert.equal(instance.state().completionOpen, false);
+  assert.equal(instance.state().announce, '');
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'clear').length, 0);
+  assert.equal(getExperience(instance.state().stats).totalExp, 20);
+  assert.equal(Object.keys(instance.state().stats.experienceEvents).length, 1);
+  assert.equal(instance.writes.at(-1).currentGame.puzzleId, 'cold-replacement');
+  assert.equal(instance.writes.at(-1).currentGame.scoreRecorded, undefined);
+  assert.deepEqual(instance.writes.at(-1).stats.clearedIds, ['completing-chain']);
+  assert.equal(timing.jobs.size, 0);
+});
+
+test('a failed cold new-game load or invalid puzzle preserves the old completion and its one pending presentation', async () => {
+  for (const failure of ['catalog', 'validation']) {
+    const timing = presentationClock();
+    const instance = await app({ loaded: savedGame(chainGame(true)), presentationClock: timing, useRealGame: true });
+    await waitFor(() => instance.state().cloud.status === 'signed-out');
+    controlledClock(instance);
+    const catalog = deferred();
+    instance.context.loadPuzzles = () => catalog.promise;
+    const completedPuzzle = chainGame(true).currentBoard.map((digit, cell) => cell < 9 ? cell + 1 : digit).join('');
+    instance.context.choosePuzzle = () => ({ puzzleId: 'invalid-complete', difficulty: '初級', puzzle: completedPuzzle });
+    const pendingStart = instance.evaluate("startNewGame('初級')");
+    instance.click('resume');
+    instance.click('digit', { digit: '1' });
+    timing.advance(100);
+    const stale = [...timing.jobs.values()][0].fn;
+    const oldAward = instance.state().currentGame.experienceAward.eventId;
+    if (failure === 'catalog') catalog.reject(new Error('offline catalog'));
+    else catalog.resolve([]);
+    await pendingStart;
+    assert.equal(instance.state().currentGame.puzzleId, 'completing-chain', failure);
+    assert.equal(instance.state().currentGame.experienceAward.eventId, oldAward, failure);
+    assert.equal(instance.evaluate('completionPending'), true, failure);
+    assert.equal(instance.state().completionOpen, false, failure);
+    assert.equal(instance.state().busy, false, failure);
+    assert.ok(instance.state().uiError, failure);
+    timing.advance(1220);
+    stale();
+    await instance.evaluate('flushWrites()');
+    assert.equal(instance.state().completionOpen, true, failure);
+    assert.equal(instance.evaluate('completionPending'), false, failure);
+    assert.equal(instance.feedbackCalls.filter(call => call.type === 'clear').length, 1, failure);
+    assert.equal(getExperience(instance.state().stats).totalExp, 20, failure);
+    assert.equal(instance.writes.at(-1).currentGame.experienceAward.eventId, oldAward, failure);
+    assert.equal(timing.jobs.size, 0, failure);
+  }
+});
+
+test('reduced-motion changes finish a completing chain statically, while autoFill OFF and turning ON alone do not start one', async () => {
+  const timing = presentationClock();
+  const instance = await app({ loaded: savedGame(chainGame(true)), presentationClock: timing });
+  realGameplay(instance);
+  controlledClock(instance);
+  instance.click('resume');
+  instance.click('digit', { digit: '1' });
+  timing.advance(100);
+  instance.motion.matches = true;
+  instance.events['motion:change']({ matches: true });
+  assert.equal(instance.evaluate('autoFillPresentation.isActive()'), false);
+  assert.equal(instance.state().completionOpen, true);
+  assert.equal(instance.state().experienceGain, null);
+  assert.equal(instance.feedbackCalls.filter(call => call.type === 'clear').length, 0);
+  timing.advance(2000);
+  assert.equal(getExperience(instance.state().stats).totalExp, 20);
+  const off = await app({ loaded: { ...savedGame(chainGame()), settings: { autoFill: false } }, presentationClock: presentationClock() });
+  realGameplay(off);
+  controlledClock(off);
+  off.click('resume');
+  off.click('digit', { digit: '1' });
+  assert.deepEqual(off.renders.at(-1).projectedGame.currentBoard.slice(0, 4), [1, 0, 0, 0]);
+  assert.equal(off.evaluate('autoFillPresentation.isActive()'), false);
+  off.click('toggle-auto-fill');
+  assert.deepEqual(off.state().currentGame.currentBoard.slice(0, 4), [1, 0, 0, 0]);
+  assert.equal(off.evaluate('autoFillPresentation.isActive()'), false);
+});
 
 test('partial play seconds survive pauses, checkpoints and reload before whole-second completion', async () => {
   const instance = await app({ loaded: {

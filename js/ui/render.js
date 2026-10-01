@@ -85,9 +85,9 @@ function boxOf(index) {
   return Math.floor(Math.floor(index / 9) / 3) * 3 + Math.floor((index % 9) / 3);
 }
 
-function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComplete, pad: keypadState }) {
-  const game = state.currentGame;
-  const completed = isComplete(game);
+function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComplete, pad: keypadState, projectedGame }) {
+  const completed = isComplete(state.currentGame);
+  const game = projectedGame || state.currentGame;
   const selected = Number.isInteger(state.selectedCell) ? state.selectedCell : 0;
   const selectedValue = game.currentBoard[selected] || 0;
   const selectedRow = Math.floor(selected / 9);
@@ -117,13 +117,13 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
     const key = padByDigit.get(digit) || { muted: false, disabled: false };
     const classes = ['number-key'];
     if (key.muted) classes.push('is-muted');
-    return `<button class="${classes.join(' ')}" data-action="digit" data-digit="${digit}" aria-label="${digit}"${state.inputMode === 'memo' ? ` aria-pressed="${!key.muted}"` : ''}${key.disabled ? ' disabled title="この数字は入力できません"' : ''}>${digit}</button>`;
+    return `<button class="${classes.join(' ')}" data-action="digit" data-digit="${digit}" aria-label="${digit}"${state.inputMode === 'memo' ? ` aria-pressed="${!key.muted}"` : ''}${completed || key.disabled ? ' disabled title="この数字は入力できません"' : ''}>${digit}</button>`;
   };
   const digits = [1, 3, 5, 7, 9].map(numberKey).join('');
   const evens = [2, 4, 6, 8].map(numberKey).join('');
   const modeMemo = state.inputMode === 'memo';
   const difficulty = difficultyList.includes(game.difficulty) ? game.difficulty : game.difficulty;
-  const canClearNotes = modeMemo && !game.currentBoard[selected];
+  const canClearNotes = !completed && modeMemo && !game.currentBoard[selected];
   return `<main class="screen game-screen${modeMemo ? ' memo-mode' : ''}">
     ${notices(state)}
     <header class="screen-header game-header">
@@ -146,10 +146,10 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
         <div class="number-row number-row--even">${evens}</div>
       </div>
       <div class="utility-row" aria-label="操作">
-        <button class="utility-button" data-action="undo"${game.undoStack.length ? '' : ' disabled'} aria-label="元に戻す">${icon('undo')}<span>Undo</span></button>
-        <button class="utility-button" data-action="redo"${game.redoStack.length ? '' : ' disabled'} aria-label="やり直す">${icon('redo')}<span>Redo</span></button>
-        <button class="utility-button memo-action${modeMemo ? ' is-active' : ''}" data-action="toggle-mode" aria-pressed="${modeMemo}" aria-label="候補メモ${modeMemo ? '中' : 'に切り替え'}">${icon('memo')}<span>MEMO</span></button>
-        <button class="utility-button" data-action="delete" aria-label="${modeMemo && !game.currentBoard[selected] ? '選択セルの候補を消去' : '選択セルの数字を削除'}">${icon('delete')}<span>DEL</span></button>
+        <button class="utility-button" data-action="undo"${!completed && game.undoStack.length ? '' : ' disabled'} aria-label="元に戻す">${icon('undo')}<span>Undo</span></button>
+        <button class="utility-button" data-action="redo"${!completed && game.redoStack.length ? '' : ' disabled'} aria-label="やり直す">${icon('redo')}<span>Redo</span></button>
+        <button class="utility-button memo-action${modeMemo ? ' is-active' : ''}" data-action="toggle-mode"${completed ? ' disabled' : ''} aria-pressed="${modeMemo}" aria-label="候補メモ${modeMemo ? '中' : 'に切り替え'}">${icon('memo')}<span>MEMO</span></button>
+        <button class="utility-button" data-action="delete"${completed ? ' disabled' : ''} aria-label="${modeMemo && !game.currentBoard[selected] ? '選択セルの候補を消去' : '選択セルの数字を削除'}">${icon('delete')}<span>DEL</span></button>
       </div>
     </section>
     <p class="sr-only" aria-live="polite" aria-atomic="true">${html(state.announce)}</p>

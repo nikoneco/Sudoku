@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { renderApp } from '../js/ui/render.js';
 import { getKeypadState } from '../js/ui/keypad.js';
 import { THEMES } from '../js/config.js';
+import { createGame, getDisplayedCandidates, getConflicts, isComplete } from '../js/game/engine.js';
 
 test('completion is a dismissible result over the full board, with input disabled', () => {
   const game = {
@@ -99,4 +100,29 @@ test('auto-fill and candidate-display settings expose independent accessible swi
   assert.match(root.innerHTML, /候補が1つのとき自動入力/);
   assert.match(root.innerHTML, /role="switch" aria-checked="false" aria-labelledby="auto-fill-label" data-action="toggle-auto-fill"/);
   assert.match(root.innerHTML, /role="switch" aria-checked="true" aria-labelledby="auto-candidates-label" data-action="toggle-auto"/);
+});
+
+test('board, candidates, highlighting and pad consume the projection while completion controls follow canonical state', () => {
+  const game = createGame({ puzzleId: 'projection', difficulty: '初級', puzzle: '0'.repeat(81) });
+  game.currentBoard = Array.from({ length: 81 }, (_, cell) => (Math.floor(cell / 9) * 3 + Math.floor(cell / 27) + cell % 9) % 9 + 1);
+  game.undoStack = [{}];
+  const projectedGame = { ...game, currentBoard: [...game.currentBoard] };
+  projectedGame.currentBoard[0] = 0;
+  projectedGame.currentBoard[1] = 0;
+  const root = { scrollTop: 0, querySelector: () => null };
+  const state = { view: 'game', currentGame: game, completionOpen: false, selectedCell: 0,
+    inputMode: 'memo', settings: { autoCandidates: true } };
+  const helpers = { isComplete, conflicts: getConflicts, displayed: getDisplayedCandidates,
+    pad: getKeypadState, projectedGame, elapsed: 1 };
+  renderApp(root, state, [], helpers);
+  assert.match(root.innerHTML, /aria-label="1行1列、候補 1、入力可能"/);
+  assert.doesNotMatch(root.innerHTML, /same-number/);
+  assert.doesNotMatch(root.innerHTML, /class="clear-overlay"/);
+  assert.match(root.innerHTML, /inert aria-disabled="true"/);
+  assert.doesNotMatch(root.innerHTML, /data-action="clear-notes"/);
+  for (const action of ['undo', 'redo', 'delete', 'toggle-mode']) {
+    assert.match(root.innerHTML, new RegExp(`data-action="${action}" disabled`));
+  }
+  assert.equal((root.innerHTML.match(/disabled title="この数字は入力できません"/g) || []).length, 9);
+  assert.match(root.innerHTML, /data-digit="1" aria-label="1" aria-pressed="true" disabled/);
 });

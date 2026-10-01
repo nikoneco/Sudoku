@@ -13,6 +13,7 @@ import { awardExperience, mergeStats, normalizeStats } from './data/stats.js';
 import { getExperience } from './data/experience.js';
 import { createExperienceAnimator } from './ui/experience-animation.js';
 import { createPlayFeedback } from './ui/play-feedback.js';
+import { createAutoFillPresentation } from './ui/auto-fill-presentation.js';
 import {
   emptyScoreProfiles,
   getGuestScoreCount,
@@ -38,6 +39,10 @@ import { getKeypadState } from './ui/keypad.js';
 const root = document.querySelector('#app');
 const experienceAnimator = createExperienceAnimator();
 const playFeedback = createPlayFeedback();
+const autoFillPresentation = createAutoFillPresentation({
+  onChange: () => render(),
+  onFinish: () => { presentCompletion(); render(); },
+});
 const state = {
   view: 'loading',
   returnView: 'home',
@@ -88,7 +93,24 @@ let scoreSyncRequested = false;
 let scoreSyncWorker = null;
 let scorePuzzles = [];
 let scorePuzzlesPromise = null;
+let completionPending = false;
 const FIREBASE_CLIENT_TIMEOUT_MS = 12_000;
+
+function presentCompletion(celebrate = true) {
+  if (!completionPending) return;
+  completionPending = false;
+  state.completionOpen = true;
+  state.announce = '完成しました';
+  if (celebrate) playFeedback.celebrate();
+  else state.experienceGain = null;
+}
+
+function settleAutoFill(renderNow = true) {
+  const hadChain = autoFillPresentation.cancel();
+  if (hadChain) playFeedback.cancel();
+  presentCompletion(false);
+  if (hadChain && renderNow) render();
+}
 
 function snapshot() {
   return JSON.parse(JSON.stringify({
@@ -197,6 +219,7 @@ async function flushWrites() {
 }
 
 function render() {
+  if (globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) settleAutoFill(false);
   const theme = THEMES.find(item => item.id === state.settings.theme) || THEMES[0];
   document.documentElement.dataset.theme = theme.id;
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme.paper);
@@ -205,6 +228,7 @@ function render() {
     conflicts: getConflicts,
     isComplete,
     pad: getKeypadState,
+    projectedGame: autoFillPresentation.project(state.currentGame),
     elapsed: currentElapsed(),
   });
   experienceAnimator.sync(root, state.view === 'game' && state.completionOpen ? state.experienceGain : null);
@@ -265,6 +289,7 @@ function stopClock(persist = true) {
 
 function changeView(view) {
   const oldView = state.view;
+  if (view !== 'game') settleAutoFill(false);
   if (oldView === 'game' && view !== 'game') stopClock();
   if (view !== 'game') state.experienceGain = null;
   state.view = view;
@@ -295,6 +320,7 @@ function chooseInitialCell(game) {
 
 async function startNewGame(difficulty = state.currentGame?.difficulty) {
   if (!ready || state.busy || !DIFFICULTIES.includes(difficulty)) return;
+  settleAutoFill(false);
   state.busy = true;
   state.uiError = '';
   render();
@@ -303,11 +329,14 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
     const puzzle = choosePuzzle(puzzles, difficulty, state.stats.clearedIds, state.currentGame?.puzzleId || null);
     const game = createGame(puzzle, { autoFill: state.settings.autoFill });
     if (isComplete(game)) throw new Error('Puzzle auto-completed at start');
+    // The old board can still be played while a cold catalog load is pending.
+    settleAutoFill(false);
     playFeedback.cancel();
     state.currentGame = game;
     state.completionOpen = false;
     state.completionExperience = null;
     state.experienceGain = null;
+    state.announce = '';
     state.selectedCell = chooseInitialCell(game);
     state.inputMode = 'number';
     state.returnView = 'home';
@@ -315,6 +344,10 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
     clockStartedAt = null;
     clockBaseSeconds = game.elapsedTime || 0;
     state.view = 'game';
+    if (document.visibilityState !== 'hidden') {
+      autoFillPresentation.start(null, game);
+      playFeedback.recordInitial(game);
+    }
     startClock();
     render();
     void queueSave();
@@ -327,6 +360,7 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
 
 function resumeGame() {
   if (!state.currentGame) return;
+  settleAutoFill(false);
   state.completionOpen = isComplete(state.currentGame);
   state.view = 'game';
   startClock();
@@ -367,6 +401,7 @@ function registerCompletedGame(game, earnExperience = false) {
 
 function finishIfComplete(game) {
   if (!isComplete(game)) return false;
+  const newlyCompleted = !game.scoreRecorded;
   const elapsedTime = Math.floor(currentElapsed());
   stopClock(false);
   state.currentGame = registerCompletedGame({
@@ -375,17 +410,21 @@ function finishIfComplete(game) {
     elapsedTime,
   }, true);
   state.view = 'game';
-  state.completionOpen = true;
-  state.announce = '完成しました';
-  playFeedback.celebrate();
+  completionPending = autoFillPresentation.isActive();
+  state.completionOpen = !completionPending;
+  state.announce = completionPending ? '' : '完成しました';
+  if (!completionPending && newlyCompleted) playFeedback.celebrate();
   return true;
 }
 
 function commitGame(next, previous, input = null) {
+  // Board actions, including no-ops, settle the previous projection before editing.
+  settleAutoFill(next === previous);
   if (next === previous) return false;
   if (input) playFeedback.recordInput(previous, next, input.cell, input.digit, input.mode);
   else playFeedback.cancel();
   state.currentGame = next;
+  if (input && state.view === 'game' && document.visibilityState !== 'hidden') autoFillPresentation.start(previous, next);
   if (finishIfComplete(next)) {
     render();
     void queueSave();
@@ -400,6 +439,7 @@ function commitGame(next, previous, input = null) {
 }
 
 function enterDigit(digit) {
+  settleAutoFill();
   const game = state.currentGame;
   const cell = state.selectedCell;
   if (!game || isComplete(game) || !Number.isInteger(cell)) return;
@@ -412,6 +452,7 @@ function enterDigit(digit) {
 }
 
 function deleteSelected() {
+  settleAutoFill();
   if (!state.currentGame || !Number.isInteger(state.selectedCell)) return;
   const previous = state.currentGame;
   if (state.inputMode === 'memo' && previous.currentBoard[state.selectedCell] === 0) {
@@ -422,6 +463,7 @@ function deleteSelected() {
 }
 
 function clearSelectedNotes() {
+  settleAutoFill();
   if (!state.currentGame || !Number.isInteger(state.selectedCell)) return;
   const previous = state.currentGame;
   if (commitGame(transact(previous, { type: 'clearNotes', cell: state.selectedCell }), previous)) {
@@ -728,6 +770,8 @@ function activateUpdate() {
   void (async () => {
     const waiting = state.updateWorker || serviceWorkerRegistration?.waiting;
     if (!waiting) return;
+    settleAutoFill();
+    playFeedback.cancel();
     stopClock();
     const saved = await flushWrites();
     if (!saved) {
@@ -829,9 +873,11 @@ root.addEventListener('keydown', (event) => {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
+    settleAutoFill(false);
     playFeedback.cancel();
     stopClock();
     void queueSave();
+    render();
   } else {
     if (state.view === 'game') startClock();
     if (state.account?.uid) void requestScoreSync();
@@ -845,10 +891,19 @@ window.addEventListener('online', () => {
 });
 
 window.addEventListener('pagehide', () => {
+  settleAutoFill(false);
   playFeedback.cancel();
   stopClock();
   void queueSave();
   void flushWrites();
+  render();
+});
+
+globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').addEventListener?.('change', (event) => {
+  if (!event.matches) return;
+  settleAutoFill(false);
+  playFeedback.cancel();
+  render();
 });
 
 const appServiceWorkerUrl = new URL('../sw.js', import.meta.url).href;
@@ -907,6 +962,8 @@ async function acquireSessionLock() {
 }
 
 async function initialize() {
+  settleAutoFill(false);
+  playFeedback.cancel();
   state.view = 'loading';
   state.loadError = false;
   state.sessionBlocked = false;

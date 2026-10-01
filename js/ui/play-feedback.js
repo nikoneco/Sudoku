@@ -1,6 +1,6 @@
+import { AUTO_FILL_BOUNCE_MS, AUTO_FILL_GAP_MS, getFreshAutoFilled } from './auto-fill-presentation.js';
+
 const INK_MS = 280;
-const CHAIN_MS = 320;
-const MAX_CHAIN_DELAY_MS = 360;
 const CLEAR_MS = 800;
 
 const inkFrames = [
@@ -8,6 +8,47 @@ const inkFrames = [
   { opacity: 1, transform: 'scale(1.035)', offset: .45 },
   { opacity: 1, transform: 'scale(1)' },
 ];
+
+const autoShape = [
+  { opacity: .3, lift: 8, scale: .55 },
+  { opacity: 1, lift: -8, scale: 1.4, offset: .2 },
+  { opacity: 1, lift: 3, scale: .9, offset: .42 },
+  { opacity: 1, lift: -3, scale: 1.13, offset: .62 },
+  { opacity: 1, lift: 1, scale: .97, offset: .8 },
+  { opacity: 1, lift: 0, scale: 1 },
+];
+
+function autoFrames(cell, ink) {
+  const cellRect = cell?.getBoundingClientRect?.();
+  const inkRect = ink?.getBoundingClientRect?.();
+  const valid = rect => rect && ['left', 'right', 'top', 'bottom', 'width', 'height']
+    .every(key => Number.isFinite(rect[key])) && rect.width > 0 && rect.height > 0;
+  let bounds = null;
+  if (valid(cellRect) && valid(inkRect)) {
+    const centerX = (inkRect.left + inkRect.right) / 2;
+    const centerY = (inkRect.top + inkRect.bottom) / 2;
+    const left = cellRect.left + 1;
+    const right = cellRect.right - 1;
+    const top = cellRect.top + 1;
+    const bottom = cellRect.bottom - 1;
+    const maxScale = Math.min(
+      (centerX - left) * 2 / inkRect.width,
+      (right - centerX) * 2 / inkRect.width,
+      (centerY - top) * 2 / inkRect.height,
+      (bottom - centerY) * 2 / inkRect.height,
+    );
+    if (maxScale > 0) bounds = { top, bottom, centerY, maxScale, height: inkRect.height };
+  }
+  return autoShape.map(({ lift, scale, ...frame }) => {
+    if (bounds) {
+      scale = Math.min(scale, bounds.maxScale);
+      const halfHeight = bounds.height * scale / 2;
+      lift = Math.max(bounds.top - bounds.centerY + halfHeight,
+        Math.min(lift, bounds.bottom - bounds.centerY - halfHeight));
+    }
+    return { ...frame, transform: `translateY(${lift}px) scale(${scale})` };
+  });
+}
 
 /** Short, presentation-only events. DOM replacement preserves each original clock. */
 export function createPlayFeedback(options = {}) {
@@ -19,6 +60,7 @@ export function createPlayFeedback(options = {}) {
   let input = null;
   let clearEvent = null;
   let timer = null;
+  let generation = 0;
   let animations = [];
 
   function reduceMotion() {
@@ -31,6 +73,7 @@ export function createPlayFeedback(options = {}) {
   }
 
   function cancel() {
+    generation += 1;
     if (timer !== null) unschedule(timer);
     timer = null;
     input = null;
@@ -40,8 +83,10 @@ export function createPlayFeedback(options = {}) {
 
   function armExpiry() {
     if (timer !== null) unschedule(timer);
+    const token = ++generation;
     const end = Math.max(input?.endsAt || 0, clearEvent?.endsAt || 0);
     timer = end ? schedule(() => {
+      if (token !== generation) return;
       timer = null;
       if (input && now() >= input.endsAt) input = null;
       if (clearEvent && now() >= clearEvent.endsAt) clearEvent = null;
@@ -55,12 +100,19 @@ export function createPlayFeedback(options = {}) {
     if (previous === next || !next || !Number.isInteger(cell)
       || cell < 0 || cell > 80 || next.initialBoard?.[cell] || reduceMotion()) return;
     const startedAt = now();
-    const autoCells = [...new Set(next.lastAutoFilled || [])].filter(index =>
-      Number.isInteger(index) && index >= 0 && index < 81
-      && !next.initialBoard?.[index] && next.currentBoard?.[index]
-      && previous.currentBoard?.[index] !== next.currentBoard[index]);
+    const autoCells = getFreshAutoFilled(previous, next);
     input = { cell, digit, mode, autoCells, startedAt,
-      endsAt: startedAt + Math.max(INK_MS, (autoCells.length ? MAX_CHAIN_DELAY_MS + CHAIN_MS : 0)) };
+      endsAt: startedAt + Math.max(INK_MS, (autoCells.length ? autoCells.length * AUTO_FILL_GAP_MS + AUTO_FILL_BOUNCE_MS : 0)) };
+    armExpiry();
+  }
+
+  function recordInitial(game) {
+    if (reduceMotion()) return;
+    const autoCells = getFreshAutoFilled(null, game);
+    if (!autoCells.length) return;
+    const startedAt = now();
+    input = { cell: null, autoCells, startedAt,
+      endsAt: startedAt + autoCells.length * AUTO_FILL_GAP_MS + AUTO_FILL_BOUNCE_MS };
     armExpiry();
   }
 
@@ -90,18 +142,23 @@ export function createPlayFeedback(options = {}) {
     if (clearEvent && (!completionOpen || timestamp >= clearEvent.endsAt)) clearEvent = null;
     if (input) {
       const elapsed = timestamp - input.startedAt;
-      const cell = root?.querySelector?.(`[data-cell="${input.cell}"]`);
-      const ink = input.mode === 'memo'
-        ? cell?.querySelector?.(`[data-note="${input.digit}"]`) || cell?.querySelector?.('.cell-notes')
-        : cell?.querySelector?.('.cell-value');
-      animate(ink, inkFrames, INK_MS, elapsed);
-      animate(root?.querySelector?.(`[data-digit="${input.digit}"]`), [
-        { transform: 'translateY(1px) scale(.97)' },
-        { transform: 'translateY(0) scale(1)' },
-      ], 170, elapsed);
+      if (Number.isInteger(input.cell)) {
+        const cell = root?.querySelector?.(`[data-cell="${input.cell}"]`);
+        const ink = input.mode === 'memo'
+          ? cell?.querySelector?.(`[data-note="${input.digit}"]`) || cell?.querySelector?.('.cell-notes')
+          : cell?.querySelector?.('.cell-value');
+        animate(ink, inkFrames, INK_MS, elapsed);
+        animate(root?.querySelector?.(`[data-digit="${input.digit}"]`), [
+          { transform: 'translateY(1px) scale(.97)' },
+          { transform: 'translateY(0) scale(1)' },
+        ], 170, elapsed);
+      }
       input.autoCells.forEach((index, order) => {
-        const delay = input.autoCells.length > 1 ? order * MAX_CHAIN_DELAY_MS / (input.autoCells.length - 1) : 60;
-        animate(root?.querySelector?.(`[data-cell="${index}"] .cell-value`), inkFrames, CHAIN_MS, elapsed, delay);
+        const delay = (order + 1) * AUTO_FILL_GAP_MS;
+        const cell = root?.querySelector?.(`[data-cell="${index}"]`);
+        const ink = cell?.querySelector?.('.cell-value');
+        // sync cancelled earlier transforms before measuring this cell's resting ink.
+        animate(ink, autoFrames(cell, ink), AUTO_FILL_BOUNCE_MS, elapsed, delay);
       });
     }
     if (clearEvent) {
@@ -123,5 +180,5 @@ export function createPlayFeedback(options = {}) {
     }
   }
 
-  return { recordInput, celebrate, sync, cancel };
+  return { recordInput, recordInitial, celebrate, sync, cancel };
 }
