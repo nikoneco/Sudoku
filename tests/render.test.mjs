@@ -135,6 +135,10 @@ test('hint button shows remaining uses and highlights only the supplied cell wit
     const state = { view: 'game', currentGame: game, selectedCell: 0, hintCell: 0, settings: { theme: theme.id } };
     renderApp(root, state, [], helpers);
     assert.match(root.innerHTML, /data-action="hint" aria-label="ヒント 残り5回">/);
+    const header = root.innerHTML.match(/<header class="screen-header game-header">([\s\S]*?)<\/header>/)[1];
+    assert.match(header, /data-action="hint"/);
+    const utility = root.innerHTML.match(/<div class="utility-row"[^>]*>([\s\S]*?)<\/div>/)[1];
+    assert.deepEqual([...utility.matchAll(/data-action="([^"]+)"/g)].map(match => match[1]), ['undo', 'redo', 'toggle-mode', 'delete']);
     assert.equal((root.innerHTML.match(/class="cell[^\"]*hint-target/g) || []).length, 1);
     assert.match(root.innerHTML, /aria-label="1行1列、空欄、入力可能、衝突、ヒント対象"/);
     assert.doesNotMatch(root.innerHTML, /data-hint-digit|正解は|答えは/);
@@ -146,7 +150,7 @@ test('hint availability respects use limit, completion and storage/session readi
   const root = { scrollTop: 0, querySelector: () => null };
   const helpers = { isComplete: () => false, conflicts: () => [], displayed: () => [], elapsed: 0, pad: getKeypadState };
   const state = { view: 'game', currentGame: game, selectedCell: 0, settings: {} };
-  const button = () => root.innerHTML.match(/<button class="utility-button hint-button"[^>]*>/)?.[0] || '';
+  const button = () => root.innerHTML.match(/<button class="header-button hint-button"[^>]*>/)?.[0] || '';
 
   renderApp(root, state, [], helpers);
   assert.match(button(), /aria-label="ヒント 残り5回"/);

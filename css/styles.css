@@ -459,8 +459,9 @@ button:focus-visible {
   padding-left: max(var(--page-gutter), env(safe-area-inset-left, 0px));
 }
 
-.game-header { height: 46px; min-height: 46px; flex: 0 0 auto; padding-bottom: 0; }
+.game-header { height: 46px; min-height: 46px; flex: 0 0 auto; padding-bottom: 0; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 4px; }
 .game-header .header-button { min-height: 44px; }
+.game-header .header-end { display: flex; align-items: center; gap: 2px; }
 .game-header .brand { font-size: 14px; }
 .game-meta {
   display: flex;
@@ -661,7 +662,7 @@ button:focus-visible {
 .utility-row {
   display: grid;
   min-height: 58px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: 2px;
   padding-top: 5px;
   border-top: 1px solid var(--line);
@@ -684,10 +685,11 @@ button:focus-visible {
 }
 .utility-button + .utility-button { border-left: 1px solid var(--line); }
 .utility-button .icon { width: 22px; height: 22px; }
-.utility-button.hint-button { gap: 1px; color: var(--teal); }
+.hint-button { min-width: 56px; flex-direction: column; gap: 1px; color: var(--teal); line-height: 1.1; }
 .hint-button-label { font-size: 12px; font-weight: 650; }
 .hint-count { font-size: 9px; font-variant-numeric: tabular-nums; letter-spacing: 0; white-space: nowrap; }
-.utility-button.hint-button:disabled { color: var(--disabled-ink); }
+.hint-button:disabled { color: var(--disabled-ink); cursor: default; }
+.hint-button:disabled:hover { background: transparent; }
 .utility-button.memo-action { color: var(--orange); }
 .utility-button.is-active { color: var(--orange); }
 .utility-button:disabled { color: var(--disabled-ink); cursor: default; }

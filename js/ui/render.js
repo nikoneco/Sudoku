@@ -136,7 +136,10 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
     <header class="screen-header game-header">
       <div class="header-start"><button class="header-button header-button--back" data-action="home" aria-label="ホームへ戻る">${icon('back')}<span>ホーム</span></button></div>
       <div class="brand" aria-label="SUDOKU">SUDOKU</div>
-      <div class="header-end"><button class="header-button header-button--settings" data-action="settings" aria-label="設定を開く">${icon('settings')}</button></div>
+      <div class="header-end">
+        <button class="header-button header-button--settings" data-action="settings" aria-label="設定を開く">${icon('settings')}</button>
+        <button class="header-button hint-button" data-action="hint"${canUseHint ? '' : ' disabled'} aria-label="ヒント 残り${hintsRemaining}回"><span class="hint-button-label">ヒント</span><span class="hint-count">残り${hintsRemaining}回</span></button>
+      </div>
     </header>
     <div class="game-meta"><span class="game-difficulty">${html(difficulty)}</span><time class="game-timer" aria-label="経過時間">${formatDuration(elapsed)}</time></div>
     <div class="board-stage">
@@ -157,7 +160,6 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
         <button class="utility-button" data-action="redo"${!completed && game.redoStack.length ? '' : ' disabled'} aria-label="やり直す">${icon('redo')}<span>Redo</span></button>
         <button class="utility-button memo-action${modeMemo ? ' is-active' : ''}" data-action="toggle-mode"${completed ? ' disabled' : ''} aria-pressed="${modeMemo}" aria-label="候補メモ${modeMemo ? '中' : 'に切り替え'}">${icon('memo')}<span>MEMO</span></button>
         <button class="utility-button" data-action="delete"${completed ? ' disabled' : ''} aria-label="${modeMemo && !game.currentBoard[selected] ? '選択セルの候補を消去' : '選択セルの数字を削除'}">${icon('delete')}<span>DEL</span></button>
-        <button class="utility-button hint-button" data-action="hint"${canUseHint ? '' : ' disabled'} aria-label="ヒント 残り${hintsRemaining}回"><span class="hint-button-label">ヒント</span><span class="hint-count">残り${hintsRemaining}回</span></button>
       </div>
     </section>
     <p class="sr-only" aria-live="polite" aria-atomic="true">${html(state.announce)}</p>
