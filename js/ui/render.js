@@ -137,8 +137,8 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
       <div class="header-start"><button class="header-button header-button--back" data-action="home" aria-label="ホームへ戻る">${icon('back')}<span>ホーム</span></button></div>
       <div class="brand" aria-label="SUDOKU">SUDOKU</div>
       <div class="header-end">
-        <button class="header-button header-button--settings" data-action="settings" aria-label="設定を開く">${icon('settings')}</button>
         <button class="header-button hint-button" data-action="hint"${canUseHint ? '' : ' disabled'} aria-label="ヒント 残り${hintsRemaining}回"><span class="hint-button-label">ヒント</span><span class="hint-count">残り${hintsRemaining}回</span></button>
+        <button class="header-button header-button--settings" data-action="settings" aria-label="設定を開く">${icon('settings')}</button>
       </div>
     </header>
     <div class="game-meta"><span class="game-difficulty">${html(difficulty)}</span><time class="game-timer" aria-label="経過時間">${formatDuration(elapsed)}</time></div>

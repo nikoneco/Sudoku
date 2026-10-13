@@ -137,6 +137,8 @@ test('hint button shows remaining uses and highlights only the supplied cell wit
     assert.match(root.innerHTML, /data-action="hint" aria-label="ヒント 残り5回">/);
     const header = root.innerHTML.match(/<header class="screen-header game-header">([\s\S]*?)<\/header>/)[1];
     assert.match(header, /data-action="hint"/);
+    const headerEnd = header.match(/<div class="header-end">([\s\S]*?)<\/div>/)[1];
+    assert.deepEqual([...headerEnd.matchAll(/data-action="([^"]+)"/g)].map(match => match[1]), ['hint', 'settings']);
     const utility = root.innerHTML.match(/<div class="utility-row"[^>]*>([\s\S]*?)<\/div>/)[1];
     assert.deepEqual([...utility.matchAll(/data-action="([^"]+)"/g)].map(match => match[1]), ['undo', 'redo', 'toggle-mode', 'delete']);
     assert.equal((root.innerHTML.match(/class="cell[^\"]*hint-target/g) || []).length, 1);

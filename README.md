@@ -60,7 +60,7 @@ Firestoreルール変更時はローカルエミュレータで `tools/verify-fi
 
 GASのコードは `gas/`。指定したスプレッドシートのPuzzles/Configから問題集を読み取ります。Script Propertiesの `SUDOKU_SPREADSHEET_ID` に参照先を設定します。`.clasp.json` と管理IDはローカル専用です。
 
-更新手順: テスト → 全問題検証 → 差分と独立レビュー → GASソース反映／既存デプロイ更新 → mainへcommit/push → PagesとAPIを確認。問題データを変えたらConfigと同梱JSONのdatasetVersionを上げます。UIを変えたらService Workerのキャッシュ版も更新します。
+更新手順: テストと変更箇所の画面確認 → 必要な場合だけ全問題検証 → 差分と必要なレビュー → 変更した公開面への反映 → Pages/APIを確認。問題データ・生成/難易度判定・盤面/候補/自動入力の計算を変えた場合や、問題の整合性に具体的な懸念がある場合は全問検証します。これらに影響しないUIのみの変更では省略し、影響が不明なら全問検証します。文書のみの変更は内容と差分の確認で済ませます。CIも既知のUI/文書変更とバージョンだけの更新では全問検証を省略し、その他の変更や比較できない場合は実施します。問題データを変えたらConfigと同梱JSONのdatasetVersionを上げ、UIを変えたらService Workerのキャッシュ版も更新します。
 
 GASは公開読取APIのみ。Sheetsの管理データ、解答、認証情報は公開しません。APIは通常JSON取得を試し、クロスオリジン通信失敗時は許可したコールバック形式のJSONPへ切り替えます。仕組みは[Google公式Content Service](https://developers.google.com/apps-script/guides/content)に基づきます。
 

@@ -6,6 +6,6 @@ Only naked singles from legal candidates minus explicit exclusions may auto-fill
 
 Do not publish credentials, spreadsheet IDs, script IDs, Drive folder IDs or local configuration. Store these in ignored .local or Script Properties. GAS public API is read-only with explicit action whitelist.
 
-Run npm test, full puzzle validation and relevant browser checks before release. Keep local, GAS deployment, Pages publication and physical iPhone verification as distinct evidence.
+Run npm test and relevant browser checks before runtime releases. Full puzzle validation is required for changes to puzzle data, generation/difficulty classification, or board/candidate/auto-fill calculations, and for concrete puzzle-integrity concerns. Skip full puzzle validation for UI-only changes that do not affect those areas; when impact is uncertain, use the full check. Documentation-only changes need a content/diff check, not game or browser tests. Keep local, GAS deployment, Pages publication and physical iPhone verification as distinct evidence.
 
 During orchestration each scope has one writer, workers cannot delegate recursively. Freeze candidate before independent review.

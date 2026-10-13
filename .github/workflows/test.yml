@@ -10,10 +10,50 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: node tools/validate-puzzles.mjs --client-only
+      - name: Select puzzle validation scope
+        id: puzzle-scope
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          import { isDeepStrictEqual } from 'node:util';
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' });
+          const base = process.env.BASE_SHA;
+          const head = process.env.HEAD_SHA;
+          const ui = /^(?:(?:css|icons|docs)\/|js\/ui\/(?:render|icons|experience-animation|play-feedback|auto-fill-presentation)\.js$|tests\/(?:render|service-worker|experience-animation|play-feedback|auto-fill-presentation)\.test\.mjs$|(?:AGENTS\.md|README\.md|index\.html|manifest\.webmanifest|sw\.js)$)/;
+          function versionOnly(file) {
+            const withoutVersion = revision => {
+              const data = JSON.parse(git('show', `${revision}:${file}`));
+              delete data.version;
+              if (data.packages?.['']) delete data.packages[''].version;
+              return data;
+            };
+            return isDeepStrictEqual(withoutVersion(base), withoutVersion(head));
+          }
+          let required = true;
+          try {
+            if (base && !/^0+$/.test(base)) {
+              const paths = git('diff', '--no-renames', '--name-only', '-z', base, head).split('\0').filter(Boolean);
+              required = paths.some(file => !ui.test(file)
+                && !(['package.json', 'package-lock.json'].includes(file) && versionOnly(file)));
+            }
+          } catch (error) {
+            console.log(`Cannot establish a UI-only change; validating all puzzles: ${error.message}`);
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `required=${required}\n`);
+          console.log(required ? 'Full puzzle validation required' : 'UI/documentation only: full puzzle validation skipped');
+          JS
+      - name: Validate all puzzles
+        if: steps.puzzle-scope.outputs.required == 'true'
+        run: node tools/validate-puzzles.mjs --client-only
