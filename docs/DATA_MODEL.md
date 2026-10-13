@@ -13,7 +13,9 @@ IndexedDB `sudoku-v1` / object store `kv`。
 ## 成績クラウド
 数独専用Firebase AuthenticationとFirestore。GoogleアカウントのUIDを所有者として、`users/{uid}/scores/{puzzleId}` に `{difficulty,elapsedTime}` を保存。旧版で個別時間が不明な場合はnull。`users/{uid}/scoreMeta/legacy` のbestTimesで旧版の難易度別最短時間を保持する。Firestoreへ盤面・メモ・履歴・メールアドレスは保存しない。クリアIDは和集合、時間は最小値をトランザクションで統合する。ルールは所有者UIDとフィールド型・値域を検証し、その他の領域を拒否する。
 
-経験値は `experienceEvents: { [UUID]: {difficulty} }` を各成績プロファイルに保持する。クラウドは `users/{uid}/experience/{UUID}` に同じ内容を作成専用で保存する。既存成績に記録がなければ0Exp。問題IDではなくプレイごとのUUIDで統合するため、再クリアは加算・再送は非加算となる。合計経験値やLvは記録から算出する。完成結果の表示用スナップショットは盤面と一緒に端末内だけへ保存する。
+経験値は `experienceEvents: { [UUID]: {difficulty,hintsUsed?} }` を各成績プロファイルに保持する。ヒント0回は従来の `{difficulty}` のまま保存する。hintsUsedは整数0〜5だけを許可し、経験値は基礎報酬×100/80/60/40/20/5%で計算する。合計と進捗は0.5Exp単位も保持する。クラウドは `users/{uid}/experience/{UUID}` に同じ内容を作成専用で保存し、既存文書は変更・削除できない。既存成績に記録がなければ0Exp。問題IDではなくプレイごとのUUIDで統合するため、再クリアは加算・再送は非加算となる。既存UUIDではクラウドで確認した内容を優先する。合計経験値やLvは記録から算出する。完成結果の表示用スナップショットは盤面と一緒に端末内だけへ保存する。
+
+途中盤面には任意の `hintsUsed`（整数0〜5）と `lastHint:{board,cell,digit}|null` を端末内だけへ保持する。旧保存の欠落は使用0回と扱い、元の保存を起動だけで書き換えない。直前と同じ盤面・対象なら再表示は無料、盤面が変われば古い強調を解除する。使用回数はUndo/Redoの対象外。再開では合法候補から対象を再検証して強調を復元する。保存された数字をそのまま正解として使用しない。
 
 ## 設定クラウド
 `users/{uid}/preferences/app` は `{autoCandidates:boolean,autoFill:boolean,theme:string}` の3項目だけを保持する。themeはclassic/forest/rose/night。所有者だけが読取・作成・更新でき、余分なフィールドや別文書・盤面データは拒否する。

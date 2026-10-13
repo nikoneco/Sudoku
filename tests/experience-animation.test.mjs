@@ -58,6 +58,31 @@ function animatorFor(clock, prefersReducedMotion = false) {
   });
 }
 
+test('fractional hint rewards animate for two seconds and retain the exact final progress', () => {
+  const clock = fakeClock();
+  const root = fakeRoot();
+  const animator = animatorFor(clock);
+  const gain = { eventId: 'half-exp', from: 90, to: 91.5 };
+  animator.sync(root, gain);
+  assert.equal(root.values.fill.style.width, '90%');
+  clock.advance(1000);
+  assert.equal(root.values.fill.style.width, '90.75%');
+  clock.advance(999);
+  assert.equal(clock.frames.size, 1);
+  clock.advance(1);
+  assert.equal(root.values.fill.style.width, '91.5%');
+  assert.equal(clock.frames.size, 0);
+  animator.sync(root, gain);
+  assert.equal(root.values.fill.style.width, '91.5%');
+  animator.sync(root, { eventId: 'next-half', from: 91.5, to: 94 });
+  assert.equal(root.values.fill.style.width, '91.5%');
+  clock.advance(2000);
+  assert.equal(root.values.fill.style.width, '94%');
+  const reduced = fakeRoot();
+  animatorFor(fakeClock(), true).sync(reduced, gain);
+  assert.equal(reduced.values.fill.style.width, '91.5%');
+});
+
 test('XP animation fills to 100, resets at level-up, and fills the remainder', () => {
   const clock = fakeClock();
   const root = fakeRoot();

@@ -93,6 +93,7 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
   const selectedRow = Math.floor(selected / 9);
   const selectedCol = selected % 9;
   const selectedBox = boxOf(selected);
+  const hintCell = Number.isInteger(state.hintCell) && state.hintCell >= 0 && state.hintCell < 81 ? state.hintCell : null;
   const conflictSet = new Set(conflicts(game.currentBoard));
   const cells = game.currentBoard.map((value, index) => {
     const row = Math.floor(index / 9);
@@ -105,10 +106,11 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
     if (selectedValue && value === selectedValue) classes.push('same-number');
     if (index === selected) classes.push('selected');
     if (conflictSet.has(index)) classes.push('conflict');
+    if (index === hintCell) classes.push('hint-target');
     const noteGrid = notes.map((digit) => `<span class="cell-note${includedMask & (1 << (digit - 1)) ? ' manual' : ''}" data-note="${digit}" style="grid-column:${((digit - 1) % 3) + 1};grid-row:${Math.floor((digit - 1) / 3) + 1}">${digit}</span>`).join('');
     const display = value ? `<span class="cell-value">${value}</span>` : (notes.length ? `<span class="cell-notes" aria-hidden="true">${noteGrid}</span>` : '');
     const accessibleValue = value ? `数字 ${value}` : (notes.length ? `候補 ${notes.join('、')}` : '空欄');
-    const accessibleFlags = [isGiven ? '固定' : '入力可能', conflictSet.has(index) ? '衝突' : ''].filter(Boolean).join('、');
+    const accessibleFlags = [isGiven ? '固定' : '入力可能', conflictSet.has(index) ? '衝突' : '', index === hintCell ? 'ヒント対象' : ''].filter(Boolean).join('、');
     return `<button class="${classes.join(' ')}" role="gridcell" aria-selected="${index === selected}" aria-label="${row + 1}行${col + 1}列、${accessibleValue}${accessibleFlags ? `、${accessibleFlags}` : ''}" data-cell="${index}">${display}</button>`;
   }).join('');
   const pad = keypadState(game, selected, state.inputMode, state.settings.autoCandidates);
@@ -124,6 +126,11 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
   const modeMemo = state.inputMode === 'memo';
   const difficulty = difficultyList.includes(game.difficulty) ? game.difficulty : game.difficulty;
   const canClearNotes = !completed && modeMemo && !game.currentBoard[selected];
+  const hintsUsedValue = Number(state.currentGame.hintsUsed ?? 0);
+  const hintsUsed = Number.isInteger(hintsUsedValue) ? Math.min(5, Math.max(0, hintsUsedValue)) : 0;
+  const hintsRemaining = 5 - hintsUsed;
+  const canUseHint = !completed && !state.busy && state.storageReady !== false && !state.sessionBlocked && hintsRemaining > 0;
+  const hintMessage = typeof state.hintMessage === 'string' ? state.hintMessage.trim() : '';
   return `<main class="screen game-screen${modeMemo ? ' memo-mode' : ''}">
     ${notices(state)}
     <header class="screen-header game-header">
@@ -139,7 +146,7 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
     <section class="entry-panel" aria-label="入力"${completed ? ' inert aria-disabled="true"' : ''}>
       <div class="entry-head">
         <span class="mode-label${modeMemo ? ' memo' : ''}" aria-live="polite"><i class="mode-dot"></i>${modeMemo ? '候補メモ' : '数字入力'}</span>
-        ${canClearNotes ? '<button class="clear-notes" data-action="clear-notes">候補を消去</button>' : ''}
+        ${hintMessage ? `<span class="hint-feedback" role="status">${html(hintMessage)}</span>` : (canClearNotes ? '<button class="clear-notes" data-action="clear-notes">候補を消去</button>' : '')}
       </div>
       <div class="number-pad" aria-label="数字キー">
         <div class="number-row">${digits}</div>
@@ -150,6 +157,7 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
         <button class="utility-button" data-action="redo"${!completed && game.redoStack.length ? '' : ' disabled'} aria-label="やり直す">${icon('redo')}<span>Redo</span></button>
         <button class="utility-button memo-action${modeMemo ? ' is-active' : ''}" data-action="toggle-mode"${completed ? ' disabled' : ''} aria-pressed="${modeMemo}" aria-label="候補メモ${modeMemo ? '中' : 'に切り替え'}">${icon('memo')}<span>MEMO</span></button>
         <button class="utility-button" data-action="delete"${completed ? ' disabled' : ''} aria-label="${modeMemo && !game.currentBoard[selected] ? '選択セルの候補を消去' : '選択セルの数字を削除'}">${icon('delete')}<span>DEL</span></button>
+        <button class="utility-button hint-button" data-action="hint"${canUseHint ? '' : ' disabled'} aria-label="ヒント 残り${hintsRemaining}回"><span class="hint-button-label">ヒント</span><span class="hint-count">残り${hintsRemaining}回</span></button>
       </div>
     </section>
     <p class="sr-only" aria-live="polite" aria-atomic="true">${html(state.announce)}</p>

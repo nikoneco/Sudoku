@@ -1,7 +1,7 @@
 import { FIREBASE_CONFIG } from '../firebase-config.js';
 import { DIFFICULTIES } from '../config.js';
 import { emptyStats, mergeStats, normalizeStats } from '../data/stats.js';
-import { isExperienceEventId } from '../data/experience.js';
+import { normalizeExperienceEvents } from '../data/experience.js';
 import { isValidSettings, normalizeSettings, validateSettingsPatch } from '../data/settings-profiles.js';
 
 const SDK_VERSION = '12.16.0';
@@ -46,12 +46,6 @@ function validLegacyData(value) {
     && (value.bestTimes[difficulty] === null || isElapsedTime(value.bestTimes[difficulty])));
 }
 
-function validExperienceEvent(eventId, value) {
-  return isExperienceEventId(eventId)
-    && hasExactKeys(value, ['difficulty'])
-    && DIFFICULTIES.includes(value.difficulty);
-}
-
 function defineMapValue(target, key, value) {
   Object.defineProperty(target, key, {
     configurable: true,
@@ -86,9 +80,9 @@ function scoreStatsFromSnapshot(scoreSnapshot, legacySnapshot, experienceSnapsho
   const experienceEvents = {};
   for (const item of experienceSnapshot.docs) {
     const eventId = item.id;
-    const value = item.data();
-    if (!validExperienceEvent(eventId, value)) continue;
-    defineMapValue(experienceEvents, eventId, { difficulty: value.difficulty });
+    const normalized = normalizeExperienceEvents({ [eventId]: item.data() });
+    if (!Object.hasOwn(normalized, eventId)) continue;
+    defineMapValue(experienceEvents, eventId, normalized[eventId]);
   }
   return normalizeStats({ clearedIds, byDifficulty: {}, totalClears: 0, records, legacyBest, experienceEvents });
 }
@@ -192,7 +186,7 @@ export async function createFirebaseClient({ sdkLoader = loadFirebaseSdk } = {})
       assertCurrentUser(uid);
       if (snapshot.exists()) return;
       assertCurrentUser(uid);
-      transaction.set(eventRef, { difficulty: desired.difficulty });
+      transaction.set(eventRef, desired);
     });
   }
 
@@ -254,7 +248,11 @@ export async function createFirebaseClient({ sdkLoader = loadFirebaseSdk } = {})
       }
 
       const finalRemote = await readStats(uid, scoresRef, legacyRef, experienceRef);
-      return mergeStats(local, finalRemote);
+      const result = mergeStats(local, finalRemote);
+      // A created cloud event cannot be changed to the local conflict resolution.
+      // Keep local-only events, but use every immutable payload read back from cloud.
+      result.experienceEvents = { ...result.experienceEvents, ...finalRemote.experienceEvents };
+      return result;
     },
   };
 }

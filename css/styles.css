@@ -548,6 +548,7 @@ button:focus-visible {
 .cell.conflict.same-number { background: var(--conflict-same-bg); }
 .cell.conflict::after { border: 1px solid var(--danger); }
 .cell.selected.conflict::after { border: 2px solid var(--danger); }
+.cell.hint-target { box-shadow: inset 0 0 0 3px var(--orange); }
 .cell-value {
   position: relative;
   z-index: 0;
@@ -619,6 +620,13 @@ button:focus-visible {
   cursor: pointer;
 }
 .clear-notes:hover { background: var(--orange-soft); }
+.hint-feedback {
+  max-width: 62%;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.25;
+  text-align: right;
+}
 
 .number-pad { display: grid; gap: 5px; }
 .number-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
@@ -653,7 +661,7 @@ button:focus-visible {
 .utility-row {
   display: grid;
   min-height: 58px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   margin-top: 2px;
   padding-top: 5px;
   border-top: 1px solid var(--line);
@@ -676,6 +684,10 @@ button:focus-visible {
 }
 .utility-button + .utility-button { border-left: 1px solid var(--line); }
 .utility-button .icon { width: 22px; height: 22px; }
+.utility-button.hint-button { gap: 1px; color: var(--teal); }
+.hint-button-label { font-size: 12px; font-weight: 650; }
+.hint-count { font-size: 9px; font-variant-numeric: tabular-nums; letter-spacing: 0; white-space: nowrap; }
+.utility-button.hint-button:disabled { color: var(--disabled-ink); }
 .utility-button.memo-action { color: var(--orange); }
 .utility-button.is-active { color: var(--orange); }
 .utility-button:disabled { color: var(--disabled-ink); cursor: default; }

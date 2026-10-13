@@ -126,3 +126,65 @@ test('board, candidates, highlighting and pad consume the projection while compl
   assert.equal((root.innerHTML.match(/disabled title="この数字は入力できません"/g) || []).length, 9);
   assert.match(root.innerHTML, /data-digit="1" aria-label="1" aria-pressed="true" disabled/);
 });
+
+test('hint button shows remaining uses and highlights only the supplied cell without revealing a digit', () => {
+  const game = createGame({ puzzleId: 'hint', difficulty: '初級', puzzle: '0'.repeat(81) });
+  const root = { scrollTop: 0, querySelector: () => null };
+  const helpers = { isComplete: () => false, conflicts: () => [0], displayed: () => [], elapsed: 0, pad: getKeypadState };
+  for (const theme of THEMES) {
+    const state = { view: 'game', currentGame: game, selectedCell: 0, hintCell: 0, settings: { theme: theme.id } };
+    renderApp(root, state, [], helpers);
+    assert.match(root.innerHTML, /data-action="hint" aria-label="ヒント 残り5回">/);
+    assert.equal((root.innerHTML.match(/class="cell[^\"]*hint-target/g) || []).length, 1);
+    assert.match(root.innerHTML, /aria-label="1行1列、空欄、入力可能、衝突、ヒント対象"/);
+    assert.doesNotMatch(root.innerHTML, /data-hint-digit|正解は|答えは/);
+  }
+});
+
+test('hint availability respects use limit, completion and storage/session readiness while old saves default to five', () => {
+  const game = createGame({ puzzleId: 'hint-limits', difficulty: '初級', puzzle: '0'.repeat(81) });
+  const root = { scrollTop: 0, querySelector: () => null };
+  const helpers = { isComplete: () => false, conflicts: () => [], displayed: () => [], elapsed: 0, pad: getKeypadState };
+  const state = { view: 'game', currentGame: game, selectedCell: 0, settings: {} };
+  const button = () => root.innerHTML.match(/<button class="utility-button hint-button"[^>]*>/)?.[0] || '';
+
+  renderApp(root, state, [], helpers);
+  assert.match(button(), /aria-label="ヒント 残り5回"/);
+  assert.doesNotMatch(button(), / disabled/);
+
+  state.currentGame = { ...game, hintsUsed: 2 };
+  renderApp(root, state, [], helpers);
+  assert.match(button(), /aria-label="ヒント 残り3回"/);
+
+  for (const disabledState of [
+    { currentGame: { ...game, hintsUsed: 5 } },
+    { busy: true },
+    { storageReady: false },
+    { sessionBlocked: true },
+  ]) {
+    Object.assign(state, { currentGame: game, busy: false, storageReady: true, sessionBlocked: false }, disabledState);
+    renderApp(root, state, [], helpers);
+    assert.match(button(), / disabled/);
+  }
+
+  state.busy = false;
+  state.storageReady = true;
+  state.sessionBlocked = false;
+  state.currentGame = game;
+  renderApp(root, state, [], { ...helpers, isComplete: () => true });
+  assert.match(button(), / disabled/);
+});
+
+test('hint messages are visible and escaped without opening an overlay', () => {
+  const game = createGame({ puzzleId: 'hint-message', difficulty: '初級', puzzle: '0'.repeat(81) });
+  const root = { scrollTop: 0, querySelector: () => null };
+  const state = { view: 'game', currentGame: game, selectedCell: 0, hintMessage: '候補はありません。', settings: {} };
+  const helpers = { isComplete: () => false, conflicts: () => [], displayed: () => [], elapsed: 0, pad: getKeypadState };
+  renderApp(root, state, [], helpers);
+  assert.match(root.innerHTML, /<span class="hint-feedback" role="status">候補はありません。<\/span>/);
+  assert.doesNotMatch(root.innerHTML, /class="clear-overlay"/);
+  state.hintMessage = '<script>';
+  renderApp(root, state, [], helpers);
+  assert.match(root.innerHTML, /&lt;script&gt;/);
+  assert.doesNotMatch(root.innerHTML, /<span class="hint-feedback" role="status"><script>/);
+});

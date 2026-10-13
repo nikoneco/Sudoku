@@ -220,9 +220,11 @@ export function mergeStats(leftStats, rightStats, puzzles = []) {
 }
 
 /** Award XP for one distinct completion event, safely retryable by event ID. */
-export function awardExperience(stats, eventId, difficulty) {
+export function awardExperience(stats, eventId, difficulty, hintsUsed = 0) {
   const normalized = normalizeStats(stats);
-  const oneEvent = normalizeExperienceEvents({ [eventId]: { difficulty } });
+  // Completion payloads are immutable, including retries of legacy full-reward events.
+  if (hasOwn(normalized.experienceEvents, eventId)) return normalized;
+  const oneEvent = normalizeExperienceEvents({ [eventId]: { difficulty, hintsUsed } });
   if (!Object.keys(oneEvent).length) return normalized;
   return normalizeStats({
     ...normalized,

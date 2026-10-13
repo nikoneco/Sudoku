@@ -1,12 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import 'fake-indexeddb/auto';
-import { saveApp, loadApp, emptyStats, recordClear, writeValue, readValue } from '../js/data/storage.js';
+import { saveApp, loadApp, emptyStats, recordClear, writeValue, readValue, validateGame } from '../js/data/storage.js';
 import { choosePuzzle, isValidPuzzle, validateDataset } from '../js/data/puzzle-repository.js';
 import { createGame, transact, undo, redo } from '../js/game/engine.js';
 import { normalizeSettingsProfiles, selectSettingsProfile, updateProfileSettings } from '../js/data/settings-profiles.js';
 const digits = '530070000600195000098000060800060003400803001700020006060000280000419005000080079';
 const puzzle = { puzzleId: 'sample_1', difficulty: '初級', puzzle: digits };
+
+test('hint metadata round-trips while old saves remain valid and damaged counts are rejected', async () => {
+  const game = createGame(puzzle, { autoFill: false });
+  assert.equal(validateGame(game), true);
+  const hinted = { ...game, hintsUsed: 3, lastHint: { board: game.currentBoard.join(''), cell: 2, digit: 4 } };
+  await saveApp({ currentGame: hinted, stats: emptyStats(), settings: {} });
+  assert.deepEqual((await loadApp()).currentGame, hinted);
+  for (const hintsUsed of [-1, 6, 1.5, '3', null]) {
+    assert.equal(validateGame({ ...game, hintsUsed }), false);
+  }
+  assert.equal(validateGame({ ...hinted, hintsUsed: 0 }), false);
+  assert.equal(validateGame({ ...hinted, lastHint: { ...hinted.lastHint, cell: 81 } }), false);
+  await assert.rejects(saveApp({ currentGame: { ...game, hintsUsed: 6 }, stats: emptyStats(), settings: {} }));
+  assert.deepEqual((await loadApp()).currentGame, hinted);
+});
 
 function deferred() {
   let resolve;

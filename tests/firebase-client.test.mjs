@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFirebaseClient } from '../js/cloud/firebase-client.js';
 import { awardExperience, emptyStats, recordClear } from '../js/data/stats.js';
+import { getExperience } from '../js/data/experience.js';
 
 function makeSdk({ documents = {}, beforeTransaction = null, existingApps = [] } = {}) {
   const state = {
@@ -199,7 +200,7 @@ test('experience sync unions remote events and creates each local event once wit
   assert.equal(Object.values(state.documents).some((value) => Object.hasOwn(value, 'totalExp')), false);
 });
 
-test('a concurrent immutable event wins its document while local conflict merging remains deterministic', async () => {
+test('a concurrent immutable event wins its document and is returned as authoritative', async () => {
   const eventId = '018f47d2-a590-7cc2-9b60-bc5472b7d826';
   let raced = false;
   const { state, sdkLoader } = makeSdk({
@@ -216,6 +217,74 @@ test('a concurrent immutable event wins its document while local conflict mergin
   const merged = await client.syncStats('account-a', local);
 
   assert.deepEqual(merged.experienceEvents, { [eventId]: { difficulty: '初級' } });
+  assert.deepEqual(state.writes, []);
+});
+
+test('discounted experience survives cloud union and retries while zero-hint events keep legacy payloads', async () => {
+  const localEvent = '018f47d2-a590-7cc2-9b60-bc5472b7d820';
+  const remoteEvent = '018f47d2-a590-7cc2-9b60-bc5472b7d821';
+  const zeroEvent = '018f47d2-a590-7cc2-9b60-bc5472b7d822';
+  const { state, sdkLoader } = makeSdk({ documents: {
+    [`users/account-a/experience/${remoteEvent}`]: { difficulty: '中級', hintsUsed: 5 },
+  } });
+  const client = await createFirebaseClient({ sdkLoader });
+  let local = awardExperience(emptyStats(), localEvent, '超上級', 5);
+  local = awardExperience(local, zeroEvent, '初級', 0);
+  const merged = await client.syncStats('account-a', local);
+  assert.deepEqual(merged.experienceEvents, {
+    [localEvent]: { difficulty: '超上級', hintsUsed: 5 },
+    [remoteEvent]: { difficulty: '中級', hintsUsed: 5 },
+    [zeroEvent]: { difficulty: '初級' },
+  });
+  assert.deepEqual(getExperience(merged), { totalExp: 24, level: 1, progress: 24 });
+  assert.deepEqual(await client.syncStats('account-a', merged), merged);
+  assert.deepEqual(state.writes, [
+    { path: `users/account-a/experience/${localEvent}`, data: { difficulty: '超上級', hintsUsed: 5 } },
+    { path: `users/account-a/experience/${zeroEvent}`, data: { difficulty: '初級' } },
+  ]);
+});
+
+test('cloud immutable payload wins both difficulty and hint conflicts without rewriting old earned XP', async () => {
+  const eventId = '018f47d2-a590-7cc2-9b60-bc5472b7d823';
+  for (const remote of [{ difficulty: '超上級' }, { difficulty: '超上級', hintsUsed: 2 }]) {
+    const { state, sdkLoader } = makeSdk({ documents: {
+      [`users/account-a/experience/${eventId}`]: remote,
+    } });
+    const client = await createFirebaseClient({ sdkLoader });
+    const local = awardExperience(emptyStats(), eventId, '初級', 5);
+    const merged = await client.syncStats('account-a', local);
+    assert.deepEqual(merged.experienceEvents[eventId], remote);
+    assert.equal(getExperience(merged).totalExp, remote.hintsUsed ? 30 : 50);
+    assert.deepEqual(state.writes, []);
+  }
+});
+
+test('a discounted event created concurrently wins even when local payload would earn more', async () => {
+  const eventId = '018f47d2-a590-7cc2-9b60-bc5472b7d82a';
+  const remote = { difficulty: '超上級', hintsUsed: 5 };
+  const { state, sdkLoader } = makeSdk({ beforeTransaction(current) {
+    current.documents.set(`users/account-a/experience/${eventId}`, remote);
+  } });
+  const client = await createFirebaseClient({ sdkLoader });
+  const local = awardExperience(emptyStats(), eventId, '初級');
+  const merged = await client.syncStats('account-a', local);
+  assert.deepEqual(merged.experienceEvents[eventId], remote);
+  assert.deepEqual(getExperience(merged), { totalExp: 2.5, level: 1, progress: 2.5 });
+  assert.deepEqual(state.writes, []);
+});
+
+test('cloud reads canonicalize zero hints but reject malformed counts and unexpected fields', async () => {
+  const eventId = index => `018f47d2-a590-7cc2-9b60-${index.toString(16).padStart(12, '0')}`;
+  const documents = { [`users/account-a/experience/${eventId(0)}`]: { difficulty: '上級', hintsUsed: 0 } };
+  [-1, 6, 2.5, '5', null, true].forEach((hintsUsed, index) => {
+    documents[`users/account-a/experience/${eventId(index + 1)}`] = { difficulty: '上級', hintsUsed };
+  });
+  documents[`users/account-a/experience/${eventId(7)}`] = { difficulty: '上級', hintsUsed: 5, totalExp: 2 };
+  const { state, sdkLoader } = makeSdk({ documents });
+  const client = await createFirebaseClient({ sdkLoader });
+  const merged = await client.syncStats('account-a', emptyStats());
+  assert.deepEqual(merged.experienceEvents, { [eventId(0)]: { difficulty: '上級' } });
+  assert.deepEqual(state.documents.get(`users/account-a/experience/${eventId(0)}`), { difficulty: '上級', hintsUsed: 0 });
   assert.deepEqual(state.writes, []);
 });
 

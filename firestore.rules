@@ -50,9 +50,11 @@ service cloud.firestore {
     function validExperienceEvent(eventId) {
       let data = request.resource.data;
       return validExperienceEventId(eventId)
-        && data.keys().hasOnly(['difficulty'])
+        && data.keys().hasOnly(['difficulty', 'hintsUsed'])
         && data.keys().hasAll(['difficulty'])
-        && validDifficulty(data.difficulty);
+        && validDifficulty(data.difficulty)
+        && (!data.keys().hasAny(['hintsUsed'])
+          || (data.hintsUsed is int && data.hintsUsed >= 0 && data.hintsUsed <= 5));
     }
 
     function validPreferences() {

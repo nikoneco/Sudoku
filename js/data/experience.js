@@ -8,6 +8,7 @@ export const EXPERIENCE_BY_DIFFICULTY = Object.freeze({
 });
 
 const EXPERIENCE_EVENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const HINT_REWARD_PERCENTAGES = Object.freeze([100, 80, 60, 40, 20, 5]);
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
 function isObject(value) {
@@ -16,6 +17,20 @@ function isObject(value) {
 
 function isDifficulty(value) {
   return DIFFICULTIES.includes(value);
+}
+
+function isHintsUsed(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 5;
+}
+
+function completionEvent(difficulty, hintsUsed) {
+  return hintsUsed === 0 ? { difficulty } : { difficulty, hintsUsed };
+}
+
+/** Invalid input earns nothing; valid rewards retain exact half-Exp increments. */
+export function getHintReward(difficulty, hintsUsed = 0) {
+  if (!isDifficulty(difficulty) || !isHintsUsed(hintsUsed)) return 0;
+  return EXPERIENCE_BY_DIFFICULTY[difficulty] * HINT_REWARD_PERCENTAGES[hintsUsed] / 100;
 }
 
 function compareText(a, b) {
@@ -48,15 +63,16 @@ export function normalizeExperienceEvents(events) {
     const event = events[eventId];
     if (!isExperienceEventId(eventId)
       || !isObject(event)
-      || Object.keys(event).length !== 1
+      || Object.keys(event).some(key => key !== 'difficulty' && key !== 'hintsUsed')
       || !hasOwn(event, 'difficulty')
-      || !isDifficulty(event.difficulty)) continue;
-    defineMapValue(normalized, eventId, { difficulty: event.difficulty });
+      || !isDifficulty(event.difficulty)
+      || (hasOwn(event, 'hintsUsed') && !isHintsUsed(event.hintsUsed))) continue;
+    defineMapValue(normalized, eventId, completionEvent(event.difficulty, hasOwn(event, 'hintsUsed') ? event.hintsUsed : 0));
   }
   return normalized;
 }
 
-/** Union events by ID. Conflicts resolve by difficulty order, independent of merge order. */
+/** Union IDs; conflicts keep the earlier difficulty and greater hint count. */
 export function mergeExperienceEvents(leftEvents, rightEvents) {
   const left = normalizeExperienceEvents(leftEvents);
   const right = normalizeExperienceEvents(rightEvents);
@@ -69,7 +85,8 @@ export function mergeExperienceEvents(leftEvents, rightEvents) {
     const difficulty = leftEvent && rightEvent
       ? chooseDifficulty(leftEvent.difficulty, rightEvent.difficulty)
       : (leftEvent || rightEvent).difficulty;
-    defineMapValue(merged, eventId, { difficulty });
+    const hintsUsed = Math.max(leftEvent?.hintsUsed || 0, rightEvent?.hintsUsed || 0);
+    defineMapValue(merged, eventId, completionEvent(difficulty, hintsUsed));
   }
   return merged;
 }
@@ -77,8 +94,9 @@ export function mergeExperienceEvents(leftEvents, rightEvents) {
 /** XP totals come only from unique completion events; legacy clears earn no XP. */
 export function getExperience(stats) {
   const events = normalizeExperienceEvents(isObject(stats) ? stats.experienceEvents : null);
-  let totalExp = 0;
-  for (const event of Object.values(events)) totalExp += EXPERIENCE_BY_DIFFICULTY[event.difficulty];
+  let halfExp = 0;
+  for (const event of Object.values(events)) halfExp += getHintReward(event.difficulty, event.hintsUsed) * 2;
+  const totalExp = halfExp / 2;
 
   return {
     totalExp,

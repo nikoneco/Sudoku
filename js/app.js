@@ -8,6 +8,7 @@ import {
   transact,
   undo,
 } from './game/engine.js';
+import { findHint } from './game/hints.js';
 import { DEFAULT_SETTINGS, emptyStats, loadApp, recordClear, saveApp } from './data/storage.js';
 import { awardExperience, mergeStats, normalizeStats } from './data/stats.js';
 import { getExperience } from './data/experience.js';
@@ -68,6 +69,8 @@ const state = {
   storageReady: false,
   uiError: '',
   announce: '',
+  hintCell: null,
+  hintMessage: '',
   updateWorker: null,
 };
 
@@ -110,6 +113,60 @@ function settleAutoFill(renderNow = true) {
   if (hadChain) playFeedback.cancel();
   presentCompletion(false);
   if (hadChain && renderNow) render();
+}
+
+function hintsUsed(game) {
+  const count = game?.hintsUsed;
+  if (count === undefined) return 0;
+  return Number.isInteger(count) && count >= 0 && count <= 5 ? count : 5;
+}
+
+function hintBoardKey(game) {
+  return Array.isArray(game?.currentBoard) ? game.currentBoard.join('') : '';
+}
+
+function restoreHint() {
+  state.hintCell = null;
+  state.hintMessage = '';
+  const game = state.currentGame;
+  const previous = game?.lastHint;
+  if (!previous || previous.board !== hintBoardKey(game) || isComplete(game)) return;
+  const found = findHint(game.currentBoard);
+  if (found.status === 'found' && previous.cell === found.cell && previous.digit === found.digit) {
+    state.hintCell = found.cell;
+  }
+}
+
+function showHint() {
+  if (!ready || !state.storageReady || state.sessionBlocked || state.busy
+    || state.view !== 'game' || !state.currentGame || isComplete(state.currentGame)) return;
+  settleAutoFill(false);
+  const game = state.currentGame;
+  const found = findHint(game.currentBoard);
+  if (found.status !== 'found') {
+    state.hintCell = null;
+    state.hintMessage = found.status === 'conflict'
+      ? '盤面を確認してね・消費なし'
+      : 'ヒントなし・消費なし';
+    state.announce = found.status === 'conflict'
+      ? '数字の重複など、盤面の矛盾を確認してください。ヒントは消費していません。'
+      : '今の盤面ではヒントが見つかりません。ヒントは消費していません。';
+    render();
+    return;
+  }
+  const board = hintBoardKey(game);
+  const previous = game.lastHint;
+  const repeated = previous?.board === board && previous.cell === found.cell && previous.digit === found.digit;
+  if (!repeated && hintsUsed(game) >= 5) return;
+  if (!repeated) {
+    state.currentGame = { ...game, hintsUsed: hintsUsed(game) + 1,
+      lastHint: { board, cell: found.cell, digit: found.digit } };
+  }
+  state.hintCell = found.cell;
+  state.hintMessage = '';
+  state.announce = `${Math.floor(found.cell / 9) + 1}行${found.cell % 9 + 1}列がヒント対象です。残り${5 - hintsUsed(state.currentGame)}回`;
+  render();
+  if (!repeated) void queueSave();
 }
 
 function snapshot() {
@@ -332,11 +389,13 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
     // The old board can still be played while a cold catalog load is pending.
     settleAutoFill(false);
     playFeedback.cancel();
-    state.currentGame = game;
+    state.currentGame = { ...game, hintsUsed: 0 };
     state.completionOpen = false;
     state.completionExperience = null;
     state.experienceGain = null;
     state.announce = '';
+    state.hintCell = null;
+    state.hintMessage = '';
     state.selectedCell = chooseInitialCell(game);
     state.inputMode = 'number';
     state.returnView = 'home';
@@ -361,6 +420,7 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
 function resumeGame() {
   if (!state.currentGame) return;
   settleAutoFill(false);
+  restoreHint();
   state.completionOpen = isComplete(state.currentGame);
   state.view = 'game';
   startClock();
@@ -376,7 +436,7 @@ function restoreCompletionExperience() {
   const award = state.currentGame?.experienceAward;
   const total = award?.totalExp;
   state.completionExperience = award?.profileKey === state.scoreProfiles.activeKey
-    && Number.isSafeInteger(total) && total >= 0
+    && Number.isFinite(total) && Number.isSafeInteger(total * 2) && total >= 0
     ? { totalExp: total, level: Math.floor(total / 100) + 1, progress: total % 100 }
     : null;
 }
@@ -389,7 +449,7 @@ function registerCompletedGame(game, earnExperience = false) {
   if (earnExperience) {
     const eventId = crypto.randomUUID();
     const from = getExperience(state.stats).totalExp;
-    nextStats = awardExperience(nextStats, eventId, game.difficulty);
+    nextStats = awardExperience(nextStats, eventId, game.difficulty, hintsUsed(game));
     const result = getExperience(nextStats);
     completedGame.experienceAward = { eventId, profileKey: state.scoreProfiles.activeKey, totalExp: result.totalExp };
     state.completionExperience = result;
@@ -421,6 +481,10 @@ function commitGame(next, previous, input = null) {
   // Board actions, including no-ops, settle the previous projection before editing.
   settleAutoFill(next === previous);
   if (next === previous) return false;
+  const boardChanged = hintBoardKey(next) !== hintBoardKey(previous);
+  next = { ...next, ...(boardChanged && previous.lastHint ? { lastHint: null } : {}) };
+  state.hintCell = null;
+  state.hintMessage = '';
   if (input) playFeedback.recordInput(previous, next, input.cell, input.digit, input.mode);
   else playFeedback.cancel();
   state.currentGame = next;
@@ -637,6 +701,11 @@ function requestScoreSync() {
         const merged = changedDuringRequest
           ? mergeStats(getProfileStats(state.scoreProfiles, currentUid), normalizedRemote, puzzles)
           : normalizedRemote;
+        if (changedDuringRequest) {
+          // Completion documents are immutable; keep confirmed cloud payloads
+          // while retaining new local event IDs created during this request.
+          merged.experienceEvents = { ...merged.experienceEvents, ...normalizedRemote.experienceEvents };
+        }
         state.scoreProfiles = updateProfileStats(state.scoreProfiles, currentUid, merged, puzzles);
         state.stats = getProfileStats(state.scoreProfiles, currentUid);
         state.settingsProfiles = applySettingsSync(state.settingsProfiles, currentUid, remoteSettings, settingsRequest);
@@ -795,7 +864,7 @@ root.addEventListener('click', (event) => {
   if (!control) return;
   const action = control.dataset.action;
   if (state.view === 'game' && isComplete(state.currentGame)
-    && ['digit', 'delete', 'clear-notes', 'undo', 'redo', 'toggle-mode'].includes(action)) return;
+    && ['digit', 'delete', 'clear-notes', 'undo', 'redo', 'toggle-mode', 'hint'].includes(action)) return;
   if (action === 'new-game') void startNewGame(control.dataset.difficulty);
   else if (action === 'new-same') void startNewGame(state.currentGame?.difficulty);
   else if (action === 'resume') resumeGame();
@@ -804,6 +873,7 @@ root.addEventListener('click', (event) => {
   else if (action === 'stats') openStats();
   else if (action === 'back') goBack();
   else if (action === 'toggle-mode') toggleInputMode();
+  else if (action === 'hint') showHint();
   else if (action === 'digit') enterDigit(Number(control.dataset.digit));
   else if (action === 'delete') deleteSelected();
   else if (action === 'clear-notes') clearSelectedNotes();
@@ -978,6 +1048,7 @@ async function initialize() {
     }
     const saved = await loadApp();
     state.currentGame = saved.currentGame || null;
+    restoreHint();
     state.scoreProfiles = normalizeScoreProfiles(saved.scoreProfiles, saved.stats || emptyStats());
     state.stats = getProfileStats(state.scoreProfiles);
     const cachedKey = state.scoreProfiles.activeKey;

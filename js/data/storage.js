@@ -68,6 +68,14 @@ function validArray(value, max) {
 export function validateGame(game) {
   if (game === null) return true;
   if (!game || typeof game.puzzleId !== 'string' || !DIFFICULTIES.includes(game.difficulty)) return false;
+  if (game.hintsUsed !== undefined && (!Number.isInteger(game.hintsUsed) || game.hintsUsed < 0 || game.hintsUsed > 5)) return false;
+  if (game.lastHint !== undefined && game.lastHint !== null) {
+    const hint = game.lastHint;
+    if (!hint || typeof hint !== 'object' || typeof hint.board !== 'string' || !/^[0-9]{81}$/.test(hint.board)
+      || !Number.isInteger(hint.cell) || hint.cell < 0 || hint.cell > 80
+      || !Number.isInteger(hint.digit) || hint.digit < 1 || hint.digit > 9
+      || !Number.isInteger(game.hintsUsed) || game.hintsUsed < 1) return false;
+  }
   const validSnapshot = s => s && validArray(s.currentBoard, 9) && validArray(s.manualIncludedCandidates, 511) && validArray(s.manualExcludedCandidates, 511) && Array.isArray(s.sources) && s.sources.length === 81 && s.sources.every(x => typeof x === 'string') && game.initialBoard.every((n, i) => !n || n === s.currentBoard[i]);
   return validArray(game.initialBoard, 9) && validSnapshot(game) && Number.isFinite(game.elapsedTime) && game.elapsedTime >= 0 && typeof game.startedAt === 'string' && Array.isArray(game.undoStack) && Array.isArray(game.redoStack) && game.undoStack.length <= 100 && game.redoStack.length <= 100 && game.undoStack.every(validSnapshot) && game.redoStack.every(validSnapshot);
 }

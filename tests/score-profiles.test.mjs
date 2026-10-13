@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  awardExperience,
   emptyStats,
   mergeStats,
   recordClear,
 } from '../js/data/stats.js';
+import { getExperience } from '../js/data/experience.js';
 import {
   emptyScoreProfiles,
   getGuestScoreCount,
@@ -105,5 +107,28 @@ test('profile keys that resemble object prototype fields remain ordinary account
   assert.equal(Object.hasOwn(profiles.accounts, '__proto__'), true);
   assert.deepEqual(getProfileStats(profiles, '__proto__').clearedIds, ['safe-id']);
   assert.deepEqual(mergeStats(profiles.accounts.__proto__, stats).clearedIds, ['safe-id']);
+});
+
+test('discounted experience stays isolated and imports from guest exactly once with fractional XP intact', () => {
+  const guestEvent = '018f47d2-a590-7cc2-9b60-bc5472b7d820';
+  const accountEvent = '018f47d2-a590-7cc2-9b60-bc5472b7d821';
+  const otherEvent = '018f47d2-a590-7cc2-9b60-bc5472b7d822';
+  let profiles = normalizeScoreProfiles({
+    guest: awardExperience(emptyStats(), guestEvent, '中級', 5),
+    accounts: {
+      'account-A': awardExperience(emptyStats(), accountEvent, '超上級', 5),
+      'account-B': awardExperience(emptyStats(), otherEvent, '初級'),
+    },
+    activeKey: 'guest',
+  });
+  profiles = selectScoreProfile(profiles, 'account-A');
+  assert.equal(getExperience(getProfileStats(profiles)).totalExp, 2.5);
+  assert.equal(getExperience(profiles.guest).totalExp, 1.5);
+  const imported = importGuestScores(profiles, 'account-A');
+  assert.equal(getExperience(getProfileStats(imported)).totalExp, 4);
+  assert.equal(getExperience(imported.guest).totalExp, 0);
+  assert.equal(getExperience(imported.accounts['account-B']).totalExp, 20);
+  assert.deepEqual(importGuestScores(imported, 'account-A'), imported);
+  assert.deepEqual(importGuestScores(imported, 'account-B').accounts['account-B'], imported.accounts['account-B']);
 });
 

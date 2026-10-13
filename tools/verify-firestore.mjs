@@ -43,13 +43,42 @@ try {
     await assertFails(sdk.setDoc(experience(db), { difficulty: '初級' }));
   }
   await assertFails(sdk.setDoc(experience(a), { difficulty: '初級' }));
+  await assertFails(sdk.updateDoc(experience(a), { hintsUsed: 5 }));
   await assertFails(sdk.deleteDoc(experience(a)));
+  const hintedEventId = hintsUsed => `018f47d2-a590-7cc2-9b60-${(16 + hintsUsed).toString(16).padStart(12, '0')}`;
+  for (let hintsUsed = 0; hintsUsed <= 5; hintsUsed += 1) {
+    const ref = sdk.doc(a, `users/account-a/experience/${hintedEventId(hintsUsed)}`);
+    const data = { difficulty: '中級', hintsUsed };
+    await assertSucceeds(sdk.setDoc(ref, data));
+    assert.deepEqual((await sdk.getDoc(ref)).data(), data);
+    await assertFails(sdk.setDoc(ref, data));
+    await assertFails(sdk.updateDoc(ref, { hintsUsed: (hintsUsed + 1) % 6 }));
+    await assertFails(sdk.updateDoc(ref, { difficulty: '超上級' }));
+    await assertFails(sdk.deleteDoc(ref));
+  }
+  for (const db of [b, guest]) {
+    const hinted = sdk.doc(db, `users/account-a/experience/${hintedEventId(5)}`);
+    await assertFails(sdk.getDoc(hinted));
+    await assertFails(sdk.setDoc(sdk.doc(db, 'users/account-a/experience/018f47d2-a590-7cc2-9b60-bc5472b7d828'), { difficulty: '中級', hintsUsed: 5 }));
+    await assertFails(sdk.updateDoc(hinted, { hintsUsed: 0 }));
+    await assertFails(sdk.deleteDoc(hinted));
+  }
   for (const [eventId, data] of [
     ['not-a-uuid', { difficulty: '初級' }],
     ['018f47d2-a590-7cc2-9b60-bc5472b7d825', { difficulty: 'unknown' }],
     ['018f47d2-a590-7cc2-9b60-bc5472b7d826', { difficulty: '初級', totalExp: 20 }],
     ['018f47d2-a590-7cc2-9b60-bc5472b7d827', {}],
   ]) {
+    await assertFails(sdk.setDoc(sdk.doc(a, `users/account-a/experience/${eventId}`), data));
+  }
+  const invalidHintPayloads = [
+    ...[-1, 6, 1.5, '5', true, null].map(hintsUsed => ({ difficulty: '中級', hintsUsed })),
+    { hintsUsed: 5 },
+    { difficulty: '中級', hintsUsed: 5, totalExp: 1.5 },
+    { difficulty: '中級', hintsUsed: 5, currentBoard: [] },
+  ];
+  for (const [index, data] of invalidHintPayloads.entries()) {
+    const eventId = `018f47d2-a590-7cc2-9b60-${(32 + index).toString(16).padStart(12, '0')}`;
     await assertFails(sdk.setDoc(sdk.doc(a, `users/account-a/experience/${eventId}`), data));
   }
   const preferences = db => sdk.doc(db, 'users/account-a/preferences/app');
@@ -87,5 +116,5 @@ try {
   await assertFails(sdk.setDoc(meta(a),{bestTimes:{'初級':-1}}));
   await assertFails(sdk.setDoc(meta(a),{bestTimes:{unknown:123}}));
   await assertFails(sdk.setDoc(meta(a),{bestTimes:{'初級':123},settings:{}}));
-  console.log('PASS: owner-only scores, immutable XP events and exact three-field app preferences; other-user/guest/board/other-preferences/invalid writes denied; legacy best-times validated.');
+  console.log('PASS: owner-only scores, immutable legacy/hinted XP events with optional integer hintsUsed 0..5, and exact three-field app preferences; other-user/guest/board/other-preferences/invalid writes denied; legacy best-times validated.');
 } finally { await env.cleanup(); }

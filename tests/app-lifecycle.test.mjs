@@ -8,6 +8,7 @@ import { getExperience } from '../js/data/experience.js';
 import { formatDuration } from '../js/ui/render.js';
 import { webcrypto } from 'node:crypto';
 import * as engine from '../js/game/engine.js';
+import { findHint } from '../js/game/hints.js';
 import { createAutoFillPresentation } from '../js/ui/auto-fill-presentation.js';
 import { getKeypadState } from '../js/ui/keypad.js';
 import {
@@ -138,6 +139,7 @@ async function app({
     matchMedia: () => motion,
     awardExperience,
     getExperience,
+    findHint,
     createExperienceAnimator: () => ({ sync(_root, gain) { experienceCalls.push(gain?.eventId || null); }, cancel() {} }),
     createAutoFillPresentation: options => createAutoFillPresentation({ ...options,
       ...(presentationClock?.options || {}), prefersReducedMotion: () => motion.matches }),
@@ -310,6 +312,112 @@ function realGameplay(instance) {
 function savedGame(game) {
   return { currentGame: game, stats: emptyStats(), scoreProfiles: emptyScoreProfiles(), settings: {} };
 }
+
+function hintGame() {
+  const board = Array(81).fill(0);
+  for (const [cell, digit] of Object.entries({ 2: 3, 4: 5, 5: 6, 6: 7, 7: 8, 8: 9, 13: 4, 28: 4 })) {
+    board[Number(cell)] = digit;
+  }
+  return engine.createGame({ puzzleId: 'hint-fixture', difficulty: '中級', puzzle: board.join('') }, { autoFill: false });
+}
+
+test('a hint highlights only the unique-location cell, charges once and survives save/reload', async () => {
+  const game = hintGame();
+  const saved = savedGame(game);
+  saved.settings = { autoFill: false };
+  const instance = await app({ loaded: saved, useRealGame: true });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  instance.click('resume');
+  const boardBefore = game.currentBoard.slice();
+  instance.click('hint');
+  assert.equal(instance.state().hintCell, 0);
+  assert.equal(instance.state().currentGame.hintsUsed, 1);
+  assert.deepEqual(instance.state().currentGame.currentBoard, boardBefore);
+  assert.equal(instance.state().currentGame.undoStack.length, 0);
+  instance.click('hint');
+  assert.equal(instance.state().currentGame.hintsUsed, 1);
+  await instance.evaluate('flushWrites()');
+  const restored = await app({ loaded: instance.writes.at(-1), useRealGame: true });
+  await waitFor(() => restored.state().cloud.status === 'signed-out');
+  restored.click('resume');
+  assert.equal(restored.state().hintCell, 0);
+  restored.click('hint');
+  assert.equal(restored.state().currentGame.hintsUsed, 1);
+});
+
+test('hint usage remains outside Undo while board changes clear the highlight', async () => {
+  const loaded = savedGame(hintGame());
+  loaded.settings = { autoFill: false };
+  const instance = await app({ loaded, useRealGame: true });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  instance.click('resume');
+  instance.click('hint');
+  instance.evaluate('state.selectedCell = 0');
+  instance.click('digit', { digit: '4' });
+  assert.equal(instance.state().hintCell, null);
+  assert.equal(instance.state().currentGame.currentBoard[0], 4);
+  instance.click('undo');
+  assert.equal(instance.state().currentGame.currentBoard[0], 0);
+  assert.equal(instance.state().currentGame.hintsUsed, 1);
+  instance.click('redo');
+  assert.equal(instance.state().currentGame.hintsUsed, 1);
+  assert.equal(instance.state().currentGame.currentBoard[0], 4);
+});
+
+test('no hint, conflicts and an exhausted allowance never spend or edit the game', async () => {
+  for (const scenario of ['none', 'conflict', 'limit']) {
+    const game = hintGame();
+    if (scenario === 'none') {
+      game.initialBoard.fill(0); game.currentBoard.fill(0); game.sources.fill('');
+    } else if (scenario === 'conflict') {
+      game.currentBoard[0] = 3;
+    } else game.hintsUsed = 5;
+    const instance = await app({ loaded: savedGame(game), useRealGame: true });
+    await waitFor(() => instance.state().cloud.status === 'signed-out');
+    instance.click('resume');
+    const before = JSON.stringify(instance.state().currentGame);
+    instance.click('hint');
+    assert.equal(JSON.stringify(instance.state().currentGame), before, scenario);
+    assert.equal(instance.state().hintCell, null);
+    if (scenario !== 'limit') assert.match(instance.state().hintMessage, /消費なし/);
+  }
+});
+
+test('five hints earn fractional XP once and restore the exact completed result', async () => {
+  const instance = await app();
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  instance.evaluate("state.currentGame = { puzzleId: 'hinted-clear', difficulty: '中級', hintsUsed: 5, completed: true, elapsedTime: 83 }; state.view = 'game'; finishIfComplete(state.currentGame);");
+  assert.equal(getExperience(instance.state().stats).totalExp, 1.5);
+  assert.equal(instance.state().experienceGain.to, 1.5);
+  instance.evaluate('finishIfComplete(state.currentGame)');
+  assert.equal(Object.keys(instance.state().stats.experienceEvents).length, 1);
+  await instance.evaluate('queueSave()');
+  await instance.evaluate('flushWrites()');
+  const restored = await app({ loaded: instance.writes.at(-1) });
+  await waitFor(() => restored.state().cloud.status === 'signed-out');
+  assert.equal(getExperience(restored.state().stats).totalExp, 1.5);
+  assert.equal(restored.state().completionExperience.totalExp, 1.5);
+  assert.equal(restored.state().experienceGain, null);
+});
+
+test('an immutable cloud XP payload wins during sync without losing a concurrent local clear', async () => {
+  const response = deferred();
+  const eventId = '018f47d2-a590-7cc2-9b60-bc5472b7d826';
+  const local = awardExperience(emptyStats(), eventId, '中級', 5);
+  const remote = awardExperience(emptyStats(), eventId, '中級');
+  const profiles = selectScoreProfile(emptyScoreProfiles(), 'account-A');
+  const cloud = makeCloud({ initialUser: { uid: 'account-A' },
+    syncStats: async (_uid, stats, call) => call === 1 ? response.promise : stats });
+  const instance = await app({ cloud, loaded: { currentGame: defaultGame(), stats: emptyStats(),
+    scoreProfiles: updateProfileStats(profiles, 'account-A', local), settings: {} } });
+  await waitFor(() => cloud.calls.length === 1);
+  instance.evaluate("const before = state.currentGame; commitGame({ ...before, completed: true, puzzleId: 'new-during-sync', difficulty: '初級', hintsUsed: 2 }, before);");
+  response.resolve(remote);
+  await waitFor(() => cloud.calls.length >= 2 && instance.state().cloud.status === 'synced');
+  assert.deepEqual(structuredClone(instance.state().stats.experienceEvents[eventId]), { difficulty: '中級' });
+  assert.equal(Object.keys(instance.state().stats.experienceEvents).length, 2);
+  assert.equal(getExperience(instance.state().stats).totalExp, 42);
+});
 
 test('input chains save their atomic result immediately while visible candidates arrive at 100/200ms', async () => {
   const timing = presentationClock();

@@ -200,5 +200,37 @@ test('XP merge unions immutable event IDs and resolves malformed or conflicting 
   });
   assert.deepEqual(mergeStats(right, left).experienceEvents, merged.experienceEvents);
   assert.deepEqual(mergeStats(merged, merged).experienceEvents, merged.experienceEvents);
-  assert.equal(awardExperience(left, eventA, '初級').experienceEvents[eventA].difficulty, '初級');
+  assert.equal(awardExperience(left, eventA, '初級').experienceEvents[eventA].difficulty, '上級');
+});
+
+test('discounted awards are retryable and never rewrite an already earned event', () => {
+  const legacy = awardExperience(emptyStats(), eventA, '超上級');
+  const retryWithHints = awardExperience(legacy, eventA, '初級', 5);
+  assert.deepEqual(retryWithHints, legacy);
+  const discounted = awardExperience(retryWithHints, eventB, '中級', 5);
+  assert.deepEqual(discounted.experienceEvents, {
+    [eventA]: { difficulty: '超上級' },
+    [eventB]: { difficulty: '中級', hintsUsed: 5 },
+  });
+  assert.deepEqual(awardExperience(discounted, eventB, '超上級', 0), discounted);
+  for (const hintsUsed of [-1, 6, 0.5, null, '5']) {
+    assert.deepEqual(awardExperience(emptyStats(), eventA, '初級', hintsUsed), emptyStats());
+  }
+});
+
+test('hint conflict merges use the greatest count and existing difficulty preference in either order', () => {
+  const left = awardExperience(awardExperience(emptyStats(), eventA, '超上級', 2), eventB, '中級');
+  const right = awardExperience(emptyStats(), eventA, '上級', 5);
+  const merged = mergeStats(left, right);
+  assert.deepEqual(merged.experienceEvents, {
+    [eventA]: { difficulty: '上級', hintsUsed: 5 },
+    [eventB]: { difficulty: '中級' },
+  });
+  assert.deepEqual(mergeStats(right, left), merged);
+  assert.deepEqual(mergeStats(merged, merged), merged);
+  assert.deepEqual(mergeStats(merged, left), merged);
+  assert.deepEqual(mergeStats(left, merged), merged);
+  const legacySameId = awardExperience(emptyStats(), eventA, '初級');
+  assert.deepEqual(mergeStats(merged, legacySameId).experienceEvents[eventA], { difficulty: '初級', hintsUsed: 5 });
+  assert.deepEqual(mergeStats(legacySameId, merged), mergeStats(merged, legacySameId));
 });

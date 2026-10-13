@@ -8,7 +8,7 @@ const MIN_FILL_MS = 240;
 
 function normalizedTotal(value) {
   const number = Number(value);
-  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+  return Number.isFinite(number) && Number.isSafeInteger(number * 2) && number >= 0 ? number : null;
 }
 
 function buildPhases(from, to) {
