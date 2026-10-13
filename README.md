@@ -4,6 +4,8 @@ iPhone向け数独PWA。候補整理とNaked Singleの連鎖だけを自動化�
 
 [アプリを開く](https://nikoneco.github.io/Sudoku/)
 
+初級・中級・上級・超上級を各1,000問、合計4,000問収録。datasetVersion 2は既存2,000問を保持して追加した問題集です。
+
 ## 使い方
 
 難易度を選び、マスをタップして数字を入力します。MEMOまたは同じマスのダブルタップで候補編集へ切り替えます。Undoは自分の1手とそこから起きた自動連鎖をまとめて戻します。DELは数字または候補を消し、その操作では自動確定しません。
@@ -38,7 +40,7 @@ npm run validate -- --client-only
 node tools/export-puzzles.mjs --help
 ```
 
-生成物は `data/puzzles.json`、解答入り管理データはGit対象外の `.local/puzzles-admin.json`。外部の問題集はコピーしません。一意解を全件検証します。解答はPWAへ配信しません。
+生成物は `data/puzzles.json`、解答入り管理データはGit対象外の `.local/puzzles-admin.json`。上のgenerateコマンドは新規生成用です。公開済み問題集を増量するときは既存の問題ID・盤面を保持し、既存問題との重複を除いた追加分を結合します。外部の問題集はコピーしません。一意解を全件検証します。解答はPWAへ配信しません。
 
 難易度は初級=Hidden Singleまで、中級=Locked Candidates、上級=Pair、超上級=実装済み論理手法では解けず探索を要する問題。空きマス数だけでは分類しません。人間の体感難易度は暫定で、X-Wing等の未実装手法で解ける問題も超上級へ含まれます。
 
