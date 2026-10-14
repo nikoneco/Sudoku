@@ -38,3 +38,26 @@ test('GAS repository uses read-only Sheets API and drops disabled rows and priva
   assert.equal(JSON.stringify(result).includes('PRIVATE'), false);
   assert.deepEqual(Object.keys(result.puzzles[0]).sort(), ['difficulty','puzzle','puzzleId']);
 });
+
+test('GAS jigsaw mode reads only Config and Puzzles_Jigsaw with public region metadata', () => {
+  const scope = api();
+  const regions = Array.from({ length: 81 }, (_, i) => String(Math.floor(i / 27) * 3 + Math.floor(i % 9 / 3))).join('');
+  scope.PropertiesService = { getScriptProperties: () => ({ getProperty: () => 'test-id' }) };
+  scope.Sheets = { Spreadsheets: { Values: { batchGet(_id, options) {
+    assert.deepEqual(Array.from(options.ranges), ['Config!A:B', 'Puzzles_Jigsaw!A:M']);
+    return { valueRanges: [{ values: [['schema_version', 1], ['dataset_version', 2], ['jigsaw_dataset_version', 3]] }, { values: [
+      ['puzzle_id', 'difficulty', 'puzzle', 'enabled', 'validated', 'solution', 'regions'],
+      ...['初級','中級','上級','超上級'].map((difficulty, i) => [`jigsaw_${i}`,difficulty,'1'+'0'.repeat(80),true,true,'PRIVATE',regions]),
+      ['jigsaw_bad','初級','1'+'0'.repeat(80),true,true,'PRIVATE','0'.repeat(81)],
+    ] }] };
+  } } } };
+  vm.runInContext(readFileSync(new URL('../gas/PuzzleRepository.gs', import.meta.url), 'utf8'), scope);
+  const result = scope.readDataset_('jigsaw');
+  assert.equal(result.datasetVersion, 3);
+  assert.equal(result.puzzles.length, 4);
+  assert.deepEqual(Object.keys(result.puzzles[0]).sort(), ['difficulty','mode','puzzle','puzzleId','regions']);
+  assert.equal(result.puzzles[0].regions, regions);
+  assert.equal(JSON.stringify(result).includes('PRIVATE'), false);
+  assert.equal(JSON.parse(scope.doGet({ parameter: { action: 'puzzles', mode: 'unknown' } }).text).error, 'INVALID_MODE');
+  assert.throws(() => scope.readDataset_('unknown'));
+});

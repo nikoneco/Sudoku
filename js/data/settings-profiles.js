@@ -1,6 +1,6 @@
 import { THEMES } from '../config.js';
 
-export const DEFAULT_SETTINGS = Object.freeze({ autoCandidates: true, autoFill: true, theme: 'classic' });
+export const DEFAULT_SETTINGS = Object.freeze({ autoCandidates: true, autoFill: true, theme: 'classic', mode: 'normal' });
 export const SETTINGS_FIELDS = Object.freeze(Object.keys(DEFAULT_SETTINGS));
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -8,7 +8,7 @@ const validKey = key => typeof key === 'string' && key.length > 0 && key !== 'gu
 const validRevision = value => Number.isSafeInteger(value) && value > 0;
 const validValue = (field, value) => field === 'theme'
   ? THEMES.some(theme => theme.id === value)
-  : typeof value === 'boolean';
+  : field === 'mode' ? value === 'normal' || value === 'jigsaw' : typeof value === 'boolean';
 
 function setOwn(object, key, value) {
   Object.defineProperty(object, key, { configurable: true, enumerable: true, writable: true, value });
@@ -29,8 +29,9 @@ export function validateSettingsPatch(patch) {
 }
 
 export function isValidSettings(value) {
-  return isObject(value) && Object.keys(value).length === SETTINGS_FIELDS.length
-    && SETTINGS_FIELDS.every(field => hasOwn(value, field) && validValue(field, value[field]));
+  return isObject(value) && Object.keys(value).every(field => SETTINGS_FIELDS.includes(field))
+    && ['autoCandidates', 'autoFill', 'theme'].every(field => hasOwn(value, field) && validValue(field, value[field]))
+    && (!hasOwn(value, 'mode') || validValue('mode', value.mode));
 }
 
 function normalizeProfile(value, fallback, guest = false) {
@@ -117,7 +118,7 @@ export function applySettingsSync(profiles, key, remoteSettings, submitted) {
   for (const field of Object.keys(submitted.pending)) {
     if (pending[field] === submitted.pending[field]) delete pending[field];
   }
-  const settings = { ...remoteSettings };
+  const settings = normalizeSettings(remoteSettings);
   for (const field of Object.keys(pending)) settings[field] = profile.settings[field];
   return replaceProfile(profiles, key, { ...profile, settings, pending });
 }

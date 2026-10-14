@@ -95,6 +95,17 @@ try {
   }
   await assertFails(sdk.getDocs(sdk.collection(a, 'users/account-a/preferences')));
   await assertFails(sdk.deleteDoc(preferences(a)));
+  const mode = db => sdk.doc(db, 'users/account-a/preferences/mode');
+  await assertSucceeds(sdk.setDoc(mode(a), { mode: 'jigsaw' }));
+  await assertSucceeds(sdk.updateDoc(mode(a), { mode: 'normal' }));
+  assert.deepEqual((await sdk.getDoc(mode(a))).data(), { mode: 'normal' });
+  for (const db of [b, guest]) {
+    await assertFails(sdk.getDoc(mode(db)));
+    await assertFails(sdk.setDoc(mode(db), { mode: 'jigsaw' }));
+  }
+  for (const data of [{ mode: 'unknown' }, { mode: 0 }, {}, { mode: 'jigsaw', currentBoard: [] }]) await assertFails(sdk.setDoc(mode(a), data));
+  await assertFails(sdk.deleteDoc(mode(a)));
+  await assertFails(sdk.setDoc(sdk.doc(a, 'users/account-a/preferences/app'), { ...settings, mode: 'jigsaw' }));
   for (const data of [
     { theme: 'night' }, { autoCandidates: true, autoFill: true },
     { ...settings, autoCandidates: 'true' }, { ...settings, autoFill: 0 },

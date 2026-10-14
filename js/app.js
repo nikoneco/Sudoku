@@ -1,4 +1,4 @@
-import { DIFFICULTIES, THEMES } from './config.js';
+import { DIFFICULTIES, GAME_MODES, THEMES } from './config.js';
 import {
   createGame,
   getConflicts,
@@ -9,6 +9,7 @@ import {
   undo,
 } from './game/engine.js';
 import { findHint } from './game/hints.js';
+import { getRegions } from './game/regions.js';
 import { DEFAULT_SETTINGS, emptyStats, loadApp, recordClear, saveApp } from './data/storage.js';
 import { awardExperience, mergeStats, normalizeStats } from './data/stats.js';
 import { getExperience } from './data/experience.js';
@@ -49,6 +50,7 @@ const state = {
   returnView: 'home',
   statsReturnView: 'home',
   currentGame: null,
+  currentGames: { normal: null, jigsaw: null },
   completionOpen: false,
   completionExperience: null,
   experienceGain: null,
@@ -97,6 +99,7 @@ let scoreSyncWorker = null;
 let scorePuzzles = [];
 let scorePuzzlesPromise = null;
 let completionPending = false;
+let newGameRequest = 0;
 const FIREBASE_CLIENT_TIMEOUT_MS = 12_000;
 
 function presentCompletion(celebrate = true) {
@@ -131,7 +134,7 @@ function restoreHint() {
   const game = state.currentGame;
   const previous = game?.lastHint;
   if (!previous || previous.board !== hintBoardKey(game) || isComplete(game)) return;
-  const found = findHint(game.currentBoard);
+  const found = findHint(game.currentBoard, getRegions(game));
   if (found.status === 'found' && previous.cell === found.cell && previous.digit === found.digit) {
     state.hintCell = found.cell;
   }
@@ -142,7 +145,7 @@ function showHint() {
     || state.view !== 'game' || !state.currentGame || isComplete(state.currentGame)) return;
   settleAutoFill(false);
   const game = state.currentGame;
-  const found = findHint(game.currentBoard);
+  const found = findHint(game.currentBoard, getRegions(game));
   if (found.status !== 'found') {
     state.hintCell = null;
     state.hintMessage = found.status === 'conflict'
@@ -169,9 +172,68 @@ function showHint() {
   if (!repeated) void queueSave();
 }
 
+function gameMode(game) {
+  return game?.mode === 'jigsaw' ? 'jigsaw' : 'normal';
+}
+
+function selectedGameMode() {
+  return state.settings.mode === 'jigsaw' ? 'jigsaw' : 'normal';
+}
+
+function keepCurrentGame() {
+  if (state.currentGame) state.currentGames[gameMode(state.currentGame)] = state.currentGame;
+}
+
+// A synchronized preference never changes the rules of a board already in play.
+function selectSavedGame(mode = selectedGameMode()) {
+  keepCurrentGame();
+  const next = state.currentGames[mode] || null;
+  if (next === state.currentGame) return;
+  state.currentGame = next;
+  state.selectedCell = next ? chooseInitialCell(next) : 0;
+  state.inputMode = 'number';
+  state.completionOpen = false;
+  state.completionExperience = null;
+  state.experienceGain = null;
+  completionPending = false;
+  lastTap = null;
+  restoreHint();
+  restoreCompletionExperience();
+}
+
+function adoptHomeMode() {
+  if (state.view === 'home') selectSavedGame();
+}
+
+function switchGameMode(mode) {
+  if (!ready || !state.storageReady || state.sessionBlocked
+    || !GAME_MODES.some(item => item.id === mode)) return;
+  newGameRequest += 1;
+  state.busy = false;
+  settleAutoFill(false);
+  playFeedback.cancel();
+  stopClock(false);
+  keepCurrentGame();
+  const key = state.settingsProfiles.activeKey;
+  state.settingsProfiles = updateProfileSettings(state.settingsProfiles, key, { mode });
+  state.settings = getProfileSettings(state.settingsProfiles, key);
+  selectSavedGame(mode);
+  state.returnView = 'home';
+  state.statsReturnView = 'home';
+  state.uiError = '';
+  state.announce = '';
+  state.view = 'home';
+  render();
+  void queueSave();
+  void runSync(mode);
+  if (state.account?.uid) void requestScoreSync();
+}
+
 function snapshot() {
+  keepCurrentGame();
   return JSON.parse(JSON.stringify({
     currentGame: state.currentGame,
+    currentGames: state.currentGames,
     stats: state.stats,
     scoreProfiles: state.scoreProfiles,
     settings: state.settings,
@@ -198,6 +260,7 @@ function activateScoreProfile(key, displayName) {
   state.stats = getProfileStats(state.scoreProfiles, key);
   state.settingsProfiles = selectSettingsProfile(state.settingsProfiles, key);
   state.settings = getProfileSettings(state.settingsProfiles, key);
+  adoptHomeMode();
   state.account = key === 'guest'
     ? null
     : { uid: key, displayName: displayName || previousName || '保存済みアカウント' };
@@ -350,6 +413,7 @@ function changeView(view) {
   if (oldView === 'game' && view !== 'game') stopClock();
   if (view !== 'game') state.experienceGain = null;
   state.view = view;
+  adoptHomeMode();
   if (view === 'game' && oldView !== 'game') startClock();
   render();
 }
@@ -375,21 +439,34 @@ function chooseInitialCell(game) {
   return index >= 0 ? index : 0;
 }
 
-async function startNewGame(difficulty = state.currentGame?.difficulty) {
+async function startNewGame(difficulty = state.currentGame?.difficulty, mode = selectedGameMode()) {
   if (!ready || state.busy || !DIFFICULTIES.includes(difficulty)) return;
+  const request = ++newGameRequest;
+  const generation = authGeneration;
+  const preferredMode = selectedGameMode();
+  const isCurrentRequest = () => request === newGameRequest
+    && generation === authGeneration && preferredMode === selectedGameMode();
   settleAutoFill(false);
   state.busy = true;
   state.uiError = '';
   render();
   try {
-    const puzzles = await loadPuzzles();
-    const puzzle = choosePuzzle(puzzles, difficulty, state.stats.clearedIds, state.currentGame?.puzzleId || null);
+    const puzzles = await loadPuzzles(mode);
+    if (!isCurrentRequest()) {
+      if (request === newGameRequest) { state.busy = false; render(); }
+      return;
+    }
+    const puzzle = choosePuzzle(puzzles, difficulty, state.stats.clearedIds,
+      state.currentGames[mode]?.puzzleId || null, mode);
     const game = createGame(puzzle, { autoFill: state.settings.autoFill });
     if (isComplete(game)) throw new Error('Puzzle auto-completed at start');
     // The old board can still be played while a cold catalog load is pending.
     settleAutoFill(false);
     playFeedback.cancel();
+    stopClock(false);
+    keepCurrentGame();
     state.currentGame = { ...game, hintsUsed: 0 };
+    state.currentGames[mode] = state.currentGame;
     state.completionOpen = false;
     state.completionExperience = null;
     state.experienceGain = null;
@@ -411,6 +488,10 @@ async function startNewGame(difficulty = state.currentGame?.difficulty) {
     render();
     void queueSave();
   } catch {
+    if (!isCurrentRequest()) {
+      if (request === newGameRequest) { state.busy = false; render(); }
+      return;
+    }
     state.uiError = '問題を準備できませんでした。保存済みの問題をもう一度読み込んでください。';
     state.busy = false;
     render();
@@ -573,7 +654,9 @@ function withTimeout(promise, timeoutMs = FIREBASE_CLIENT_TIMEOUT_MS) {
 
 async function loadScorePuzzleCatalog() {
   if (scorePuzzlesPromise) return scorePuzzlesPromise;
-  scorePuzzlesPromise = loadPuzzles().then((puzzles) => {
+  scorePuzzlesPromise = Promise.allSettled(GAME_MODES.map(mode => loadPuzzles(mode.id))).then((results) => {
+    const puzzles = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    if (!puzzles.length && results.some(result => result.status === 'rejected')) throw new Error('Puzzle catalogs unavailable');
     scorePuzzles = puzzles;
     const before = JSON.stringify(state.scoreProfiles);
     const profiles = normalizeScoreProfiles(state.scoreProfiles, state.scoreProfiles?.guest || state.stats, puzzles);
@@ -710,6 +793,7 @@ function requestScoreSync() {
         state.stats = getProfileStats(state.scoreProfiles, currentUid);
         state.settingsProfiles = applySettingsSync(state.settingsProfiles, currentUid, remoteSettings, settingsRequest);
         state.settings = getProfileSettings(state.settingsProfiles, currentUid);
+        adoptHomeMode();
         const settingsStillPending = Object.keys(getSettingsProfile(state.settingsProfiles, currentUid).pending).length > 0;
         scoreRevision += 1;
         refreshGuestScoreCount();
@@ -821,10 +905,10 @@ async function importGuestScoresForAccount() {
   }
 }
 
-function runSync() {
+function runSync(mode = selectedGameMode()) {
   state.syncError = false;
   render();
-  return syncPuzzles().then((result) => {
+  return syncPuzzles(mode).then((result) => {
     state.syncError = Boolean(result?.offline);
     render();
     return result;
@@ -866,7 +950,7 @@ root.addEventListener('click', (event) => {
   if (state.view === 'game' && isComplete(state.currentGame)
     && ['digit', 'delete', 'clear-notes', 'undo', 'redo', 'toggle-mode', 'hint'].includes(action)) return;
   if (action === 'new-game') void startNewGame(control.dataset.difficulty);
-  else if (action === 'new-same') void startNewGame(state.currentGame?.difficulty);
+  else if (action === 'new-same') void startNewGame(state.currentGame?.difficulty, gameMode(state.currentGame));
   else if (action === 'resume') resumeGame();
   else if (action === 'home') { state.uiError = ''; changeView('home'); }
   else if (action === 'settings') openSettings();
@@ -887,6 +971,8 @@ root.addEventListener('click', (event) => {
     changeSettings({ autoFill: !state.settings.autoFill });
   } else if (action === 'set-theme' && THEMES.some(theme => theme.id === control.dataset.theme)) {
     changeSettings({ theme: control.dataset.theme });
+  } else if (action === 'set-game-mode') {
+    switchGameMode(control.dataset.mode);
   } else if (action === 'retry-save') void queueSave();
   else if (action === 'retry-sync') void runSync();
   else if (action === 'sign-in') void signInToGoogle();
@@ -1047,8 +1133,9 @@ async function initialize() {
       return;
     }
     const saved = await loadApp();
+    state.currentGames = { normal: null, jigsaw: null, ...saved.currentGames };
     state.currentGame = saved.currentGame || null;
-    restoreHint();
+    keepCurrentGame();
     state.scoreProfiles = normalizeScoreProfiles(saved.scoreProfiles, saved.stats || emptyStats());
     state.stats = getProfileStats(state.scoreProfiles);
     const cachedKey = state.scoreProfiles.activeKey;
@@ -1058,9 +1145,12 @@ async function initialize() {
     refreshGuestScoreCount();
     state.settingsProfiles = normalizeSettingsProfiles(saved.settingsProfiles, saved.settings, cachedKey);
     state.settings = getProfileSettings(state.settingsProfiles);
+    selectSavedGame();
+    restoreHint();
     state.storageReady = true;
     let initializationNeedsSave = JSON.stringify(saved.scoreProfiles || null) !== JSON.stringify(state.scoreProfiles)
-      || JSON.stringify(saved.settingsProfiles || null) !== JSON.stringify(state.settingsProfiles);
+      || JSON.stringify(saved.settingsProfiles || null) !== JSON.stringify(state.settingsProfiles)
+      || !saved.currentGames;
     if (state.currentGame && isComplete(state.currentGame)) {
       const previousGame = state.currentGame;
       state.currentGame = registerCompletedGame(state.currentGame);

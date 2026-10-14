@@ -6,6 +6,10 @@ iPhone向け数独PWA。候補整理とNaked Singleの連鎖だけを自動化�
 
 初級・中級・上級・超上級を各1,000問、合計4,000問収録。datasetVersion 2は既存2,000問を保持して追加した問題集です。
 
+通常とジグソーを設定の「数独の種類」から切り替えられます。ジグソーも各難易度1,000問、両種類合計8,000問。ジグソーでは3×3ブロックの代わりに、太線で囲まれた不規則な9マスの領域へ1〜9を入れます。キー操作、候補、自動入力、ヒントは共通です。
+
+途中問題は種類ごとに1件保存し、切り替えると選んだ種類のホームへ戻ります。クリア数・最短時間は種類別、経験値・Lv・称号は共通です。モード選択は設定とともにGoogle同期し、進行中の盤面のルールは同期では変わりません。
+
 ## 使い方
 
 難易度を選び、マスをタップして数字を入力します。MEMOまたは同じマスのダブルタップで候補編集へ切り替えます。Undoは自分の1手とそこから起きた自動連鎖をまとめて戻します。DELは数字または候補を消し、その操作では自動確定しません。
@@ -40,6 +44,9 @@ npm run validate
 ## 管理用JSONのないcloneでは公開問題を独立検証
 npm run validate -- --client-only
 node tools/export-puzzles.mjs --help
+node tools/generate-jigsaw.mjs --count-per-tier 1000
+node tools/validate-jigsaw.mjs
+node tools/validate-jigsaw.mjs --client-only
 ```
 
 生成物は `data/puzzles.json`、解答入り管理データはGit対象外の `.local/puzzles-admin.json`。上のgenerateコマンドは新規生成用です。公開済み問題集を増量するときは既存の問題ID・盤面を保持し、既存問題との重複を除いた追加分を結合します。外部の問題集はコピーしません。一意解を全件検証します。解答はPWAへ配信しません。
@@ -59,6 +66,8 @@ Google認証は[Firebase公式のポップアップ方式](https://firebase.goog
 Firestoreルール変更時はローカルエミュレータで `tools/verify-firestore.mjs` を実行し、本人のみの読み書き・他人/未ログインの拒否・盤面・不正な設定の書込み拒否を確認してから、数独専用Firebaseに反映します。検証依存は `.local/firebase-qa` に `firebase-tools @firebase/rules-unit-testing firebase@12.16.0` をインストール（Java 21以降が必要）。`firebase emulators:exec --config firebase.emulator.json --project demo-sudoku --only firestore "node tools/verify-firestore.mjs"`。異なる依存配置は `SUDOKU_FIREBASE_QA_ROOT` で指定できます。本番DBにテスト成績を入れません。
 
 GASのコードは `gas/`。指定したスプレッドシートのPuzzles/Configから問題集を読み取ります。Script Propertiesの `SUDOKU_SPREADSHEET_ID` に参照先を設定します。`.clasp.json` と管理IDはローカル専用です。
+
+ジグソーは同じスプレッドシートの `Puzzles_Jigsaw`（既存12管理列＋regions）から配信します。APIの `mode=jigsaw` で種類を指定し、省略時は通常の応答を維持します。問題は開発時に事前生成し、PWA上では生成しません。ジグソーの同梱問題は `data/puzzles-jigsaw.json`、解答入り管理データはGit対象外の `.local/jigsaw-admin.json`。全問を独立したexact-cover解法でも一意解検証します。
 
 更新手順: テストと変更箇所の画面確認 → 必要な場合だけ全問題検証 → 差分と必要なレビュー → 変更した公開面への反映 → Pages/APIを確認。問題データ・生成/難易度判定・盤面/候補/自動入力の計算を変えた場合や、問題の整合性に具体的な懸念がある場合は全問検証します。これらに影響しないUIのみの変更では省略し、影響が不明なら全問検証します。文書のみの変更は内容と差分の確認で済ませます。CIも既知のUI/文書変更とバージョンだけの更新では全問検証を省略し、その他の変更や比較できない場合は実施します。問題データを変えたらConfigと同梱JSONのdatasetVersionを上げ、UIを変えたらService Workerのキャッシュ版も更新します。
 

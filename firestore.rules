@@ -72,6 +72,15 @@ service cloud.firestore {
       allow delete, list: if false;
     }
 
+    match /users/{userId}/preferences/mode {
+      allow get: if owns(userId) && userId != 'guest';
+      allow create, update: if owns(userId) && userId != 'guest'
+        && request.resource.data.keys().hasOnly(['mode'])
+        && request.resource.data.keys().hasAll(['mode'])
+        && request.resource.data.mode in ['normal', 'jigsaw'];
+      allow delete, list: if false;
+    }
+
     match /users/{userId}/scores/{puzzleId} {
       allow get: if owns(userId) && validPuzzleId(puzzleId);
       allow list: if owns(userId);

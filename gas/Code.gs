@@ -8,10 +8,12 @@ function doGet(e) {
   }
   try {
     var action = params.action || 'health';
+    var mode = params.mode || 'normal';
     if (['health', 'meta', 'sync', 'puzzles'].indexOf(action) < 0) result = { error: 'UNKNOWN_ACTION' };
+    else if (['normal', 'jigsaw'].indexOf(mode) < 0) result = { error: 'INVALID_MODE' };
     else if (action === 'health') result = { ok: true, schemaVersion: 1, service: 'sudoku' };
     else {
-      var dataset = readDataset_();
+      var dataset = readDataset_(mode);
       if (action === 'meta') result = { schemaVersion: 1, datasetVersion: dataset.datasetVersion, counts: dataset.counts };
       else if (action === 'sync' && String(dataset.datasetVersion) === String(params.version)) result = { schemaVersion: 1, datasetVersion: dataset.datasetVersion, unchanged: true };
       else result = { schemaVersion: 1, datasetVersion: dataset.datasetVersion, puzzles: dataset.puzzles };

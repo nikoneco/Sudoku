@@ -153,7 +153,7 @@ test('legacy settings use strict booleans and preserve the selected account valu
   await writeValue('app', { currentGame: game, stats: emptyStats(), scoreProfiles, settings: { autoCandidates: false, autoFill: 'false', theme: 'night' } });
   const loaded = await loadApp();
   assert.deepEqual(loaded.currentGame, game);
-  assert.deepEqual(loaded.settings, { autoCandidates: false, autoFill: true, theme: 'night' });
+  assert.deepEqual(loaded.settings, { autoCandidates: false, autoFill: true, theme: 'night', mode: 'normal' });
   assert.deepEqual(loaded.settingsProfiles.accounts.A.settings, loaded.settings);
   assert.deepEqual(loaded.settingsProfiles.accounts.A.pending, {});
 });
@@ -167,6 +167,6 @@ test('pending per-account settings revisions survive atomic app storage', async 
   await saveApp({ currentGame: game, scoreProfiles, settingsProfiles, stats: emptyStats() });
   const loaded = await loadApp();
   assert.deepEqual(loaded.settingsProfiles, settingsProfiles);
-  assert.deepEqual(loaded.settings, { autoCandidates: true, autoFill: false, theme: 'forest' });
+  assert.deepEqual(loaded.settings, { autoCandidates: true, autoFill: false, theme: 'forest', mode: 'normal' });
   assert.deepEqual(loaded.currentGame, game);
 });

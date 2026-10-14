@@ -2,13 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { DIFFICULTIES, THEMES } from '../js/config.js';
+import { DIFFICULTIES, GAME_MODES, THEMES } from '../js/config.js';
 import { awardExperience, emptyStats, mergeStats, normalizeStats, recordClear } from '../js/data/stats.js';
 import { getExperience } from '../js/data/experience.js';
 import { formatDuration } from '../js/ui/render.js';
 import { webcrypto } from 'node:crypto';
 import * as engine from '../js/game/engine.js';
 import { findHint } from '../js/game/hints.js';
+import { getRegions, NORMAL_REGIONS } from '../js/game/regions.js';
 import { createAutoFillPresentation } from '../js/ui/auto-fill-presentation.js';
 import { getKeypadState } from '../js/ui/keypad.js';
 import {
@@ -140,6 +141,7 @@ async function app({
     awardExperience,
     getExperience,
     findHint,
+    getRegions,
     createExperienceAnimator: () => ({ sync(_root, gain) { experienceCalls.push(gain?.eventId || null); }, cancel() {} }),
     createAutoFillPresentation: options => createAutoFillPresentation({ ...options,
       ...(presentationClock?.options || {}), prefersReducedMotion: () => motion.matches }),
@@ -171,6 +173,7 @@ async function app({
     selectSettingsProfile,
     updateProfileSettings,
     DIFFICULTIES,
+    GAME_MODES,
     THEMES,
     emptyStats,
     recordClear,
@@ -1134,7 +1137,7 @@ test('local settings switches and cloud hydration never alter the saved board or
   assert.equal(JSON.stringify(instance.state().currentGame), before);
   instance.click('sign-in');
   await waitFor(() => instance.state().cloud.status === 'synced');
-  assert.deepEqual(structuredClone(instance.state().settings), remote);
+  assert.deepEqual(structuredClone(instance.state().settings), { ...remote, mode: 'normal' });
   assert.deepEqual(cloud.settingsCalls[0].patch, {});
   assert.equal(JSON.stringify(instance.state().currentGame), before);
 });
@@ -1191,18 +1194,18 @@ test('existing accounts hydrate remote settings while new UIDs seed from guest, 
   const cloud = makeCloud({ initialUser: { uid: 'A' }, settingsDocuments: { A: remoteA } });
   const instance = await app({ cloud, loaded: { currentGame: defaultGame(), stats: emptyStats(), scoreProfiles: emptyScoreProfiles(), settings: guest } });
   await waitFor(() => instance.state().cloud.status === 'synced');
-  assert.deepEqual(structuredClone(instance.state().settings), remoteA);
+  assert.deepEqual(structuredClone(instance.state().settings), { ...remoteA, mode: 'normal' });
   assert.deepEqual(cloud.settingsCalls[0].patch, {});
   cloud.emit({ uid: 'B' });
   await waitFor(() => instance.state().account?.uid === 'B' && instance.state().cloud.status === 'synced');
-  assert.deepEqual(cloud.preferences.get('B'), guest);
+  assert.deepEqual(cloud.preferences.get('B'), { ...guest, mode: 'normal' });
   instance.click('toggle-auto-fill');
   await waitFor(() => instance.state().cloud.status === 'synced');
   cloud.emit({ uid: 'A' });
-  assert.deepEqual(structuredClone(instance.state().settings), remoteA);
+  assert.deepEqual(structuredClone(instance.state().settings), { ...remoteA, mode: 'normal' });
   await waitFor(() => instance.state().cloud.status === 'synced');
   cloud.emit(null);
-  assert.deepEqual(structuredClone(instance.state().settings), guest);
+  assert.deepEqual(structuredClone(instance.state().settings), { ...guest, mode: 'normal' });
   assert.equal(instance.state().currentGame.puzzleId, 'in-progress');
 });
 
@@ -1225,7 +1228,7 @@ test('offline settings changes are durable per field and retry after reload and 
   restored.events.online();
   await waitFor(() => restored.state().cloud.status === 'synced');
   assert.deepEqual(cloud.settingsCalls.at(-1).patch, { autoFill: false, theme: 'rose' });
-  assert.deepEqual(structuredClone(restored.state().settings), { autoCandidates: false, autoFill: false, theme: 'rose' });
+  assert.deepEqual(structuredClone(restored.state().settings), { autoCandidates: false, autoFill: false, theme: 'rose', mode: 'normal' });
   assert.deepEqual(structuredClone(restored.state().settingsProfiles.accounts.A.pending), {});
 });
 
@@ -1300,7 +1303,7 @@ test('same-field edits during syncSettings are never acknowledged by an older re
   gate.resolve({ autoCandidates: false, autoFill: true, theme: 'night' });
   await waitFor(() => cloud.settingsCalls.length === 3 && instance.state().cloud.status === 'synced');
   assert.deepEqual(cloud.settingsCalls[2].patch, { theme: 'classic', autoFill: false });
-  assert.deepEqual(structuredClone(instance.state().settings), { autoCandidates: false, autoFill: false, theme: 'classic' });
+  assert.deepEqual(structuredClone(instance.state().settings), { autoCandidates: false, autoFill: false, theme: 'classic', mode: 'normal' });
   assert.deepEqual(structuredClone(instance.state().settingsProfiles.accounts.A.pending), {});
 });
 
@@ -1318,5 +1321,197 @@ test('account switches discard settings replies, including a return to the same 
     assert.equal(instance.state().settings.theme, 'classic');
     assert.equal(instance.state().settingsProfiles.accounts.A.settings.theme, 'classic');
     assert.ok(cloud.settingsCalls.slice(1).every(call => call.uid === nextUid));
+  }
+});
+
+function jigsawGame(id = 'jigsaw_saved') {
+  const regions = [...NORMAL_REGIONS];
+  [regions[2], regions[12]] = [regions[12], regions[2]];
+  let game = engine.createGame({ puzzleId: id, difficulty: '初級', puzzle: '0'.repeat(81),
+    mode: 'jigsaw', regions: regions.join('') }, { autoFill: false });
+  game = engine.transact(game, { type: 'set', cell: 0, value: 4 }, { autoFill: false });
+  game = engine.transact(game, { type: 'toggleCandidate', cell: 11, value: 6, autoCandidates: false }, { autoFill: false });
+  game.elapsedTime = 17.625;
+  return game;
+}
+
+test('explicit Sudoku mode switches preserve separate boards, notes, history and fractional clocks', async () => {
+  let normal = engine.createGame({ puzzleId: 'normal_saved', difficulty: '初級', puzzle: '0'.repeat(81) }, { autoFill: false });
+  normal = engine.transact(normal, { type: 'set', cell: 0, value: 1 }, { autoFill: false });
+  normal = engine.transact(normal, { type: 'toggleCandidate', cell: 10, value: 5, autoCandidates: false }, { autoFill: false });
+  normal.elapsedTime = 83.25;
+  const jigsaw = jigsawGame();
+  const instance = await app({ useRealGame: true, loaded: { ...savedGame(normal),
+    currentGames: { normal, jigsaw }, settings: { autoFill: false, mode: 'normal' } } });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  const clock = controlledClock(instance, 1000);
+  instance.click('resume');
+  clock.advance(1250);
+  instance.click('settings');
+  instance.click('set-game-mode', { mode: 'jigsaw' });
+  assert.equal(instance.state().view, 'home');
+  assert.equal(instance.state().currentGame.puzzleId, jigsaw.puzzleId);
+  assert.equal(instance.state().currentGames.normal.elapsedTime, 84.5);
+  assert.deepEqual(structuredClone(instance.state().currentGames.normal.manualIncludedCandidates), normal.manualIncludedCandidates);
+  instance.click('resume');
+  clock.advance(875);
+  instance.click('settings');
+  instance.click('set-game-mode', { mode: 'normal' });
+  assert.equal(instance.state().currentGames.jigsaw.elapsedTime, 18.5);
+  assert.equal(instance.state().currentGame.currentBoard[0], 1);
+  assert.equal(instance.state().currentGame.undoStack.length, 2);
+  instance.click('resume');
+  instance.click('undo');
+  assert.equal(instance.state().currentGame.manualIncludedCandidates[10], 0);
+  assert.equal(instance.state().currentGame.currentBoard[0], 1);
+  instance.click('redo');
+  assert.equal(instance.state().currentGame.manualIncludedCandidates[10], 16);
+  instance.click('home');
+  await instance.evaluate('flushWrites()');
+  const saved = instance.writes.at(-1);
+  assert.equal(saved.currentGames.normal.puzzleId, 'normal_saved');
+  assert.equal(saved.currentGames.jigsaw.puzzleId, 'jigsaw_saved');
+  assert.equal(saved.currentGames.jigsaw.undoStack.length, 2);
+  const restored = await app({ loaded: saved, useRealGame: true });
+  restored.click('settings');
+  restored.click('set-game-mode', { mode: 'jigsaw' });
+  assert.deepEqual(structuredClone(restored.state().currentGame), saved.currentGames.jigsaw);
+});
+
+test('a new puzzle replaces only its mode slot and repository calls retain the selected mode', async () => {
+  const normal = engine.createGame({ puzzleId: 'normal_keep', difficulty: '初級', puzzle: '0'.repeat(81) }, { autoFill: false });
+  const jigsaw = jigsawGame();
+  const instance = await app({ useRealGame: true, loaded: { ...savedGame(jigsaw),
+    currentGames: { normal, jigsaw }, settings: { mode: 'jigsaw', autoFill: false } } });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  const calls = [];
+  const nextPuzzle = { puzzleId: 'jigsaw_new', difficulty: '初級', puzzle: '0'.repeat(81), mode: 'jigsaw', regions: jigsaw.regions };
+  instance.context.loadPuzzles = async mode => { calls.push(['load', mode]); return [nextPuzzle]; };
+  instance.context.choosePuzzle = (puzzles, difficulty, cleared, current, mode) => {
+    calls.push(['choose', difficulty, current, mode]); return puzzles[0];
+  };
+  await instance.evaluate("startNewGame('初級')");
+  assert.deepEqual(calls, [['load', 'jigsaw'], ['choose', '初級', 'jigsaw_saved', 'jigsaw']]);
+  assert.equal(instance.state().currentGame.puzzleId, 'jigsaw_new');
+  assert.equal(instance.state().currentGame.mode, 'jigsaw');
+  assert.equal(instance.state().currentGame.undoStack.length, 0);
+  assert.equal(instance.state().currentGame.hintsUsed, 0);
+  assert.deepEqual(structuredClone(instance.state().currentGames.normal), normal);
+  instance.context.loadPuzzles = async () => { throw new Error('catalog offline'); };
+  await instance.evaluate("startNewGame('初級')");
+  assert.equal(instance.state().currentGame.puzzleId, 'jigsaw_new');
+  assert.deepEqual(structuredClone(instance.state().currentGames.normal), normal);
+});
+
+test('legacy single saves become normal slots without being offered as a jigsaw continuation', async () => {
+  const normal = engine.createGame({ puzzleId: 'legacy-normal', difficulty: '初級', puzzle: '0'.repeat(81) }, { autoFill: false });
+  const instance = await app({ useRealGame: true, loaded: savedGame(normal) });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  assert.equal(instance.state().settings.mode, 'normal');
+  instance.click('settings');
+  instance.click('set-game-mode', { mode: 'jigsaw' });
+  await instance.evaluate('flushWrites()');
+  assert.equal(instance.state().currentGame, null);
+  assert.deepEqual(instance.writes.at(-1).currentGames.normal, normal);
+  assert.equal(instance.writes.at(-1).currentGames.jigsaw, null);
+});
+
+test('cloud mode hydration preserves an active board and both slots until home selects the preference', async () => {
+  const gate = deferred();
+  const normal = engine.createGame({ puzzleId: 'normal-cloud', difficulty: '初級', puzzle: '0'.repeat(81) }, { autoFill: false });
+  const jigsaw = jigsawGame('jigsaw_cloud');
+  const cloud = makeCloud({ users: [{ uid: 'A' }], syncSettings: () => gate.promise });
+  const instance = await app({ cloud, useRealGame: true, loaded: { ...savedGame(normal),
+    currentGames: { normal, jigsaw }, settings: { mode: 'normal', autoFill: false } } });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  instance.click('resume');
+  instance.click('sign-in');
+  await waitFor(() => cloud.settingsCalls.length === 1);
+  const before = JSON.stringify(instance.state().currentGame);
+  gate.resolve({ ...DEFAULT_SETTINGS, mode: 'jigsaw', theme: 'night' });
+  await waitFor(() => instance.state().cloud.status === 'synced');
+  assert.equal(instance.state().settings.mode, 'jigsaw');
+  assert.equal(instance.state().view, 'game');
+  assert.equal(JSON.stringify(instance.state().currentGame), before);
+  await instance.evaluate('flushWrites()');
+  assert.equal(instance.writes.at(-1).currentGames.normal.puzzleId, normal.puzzleId);
+  assert.equal(instance.writes.at(-1).currentGames.jigsaw.puzzleId, jigsaw.puzzleId);
+  instance.click('home');
+  assert.equal(instance.state().currentGame.puzzleId, jigsaw.puzzleId);
+  assert.equal(instance.state().currentGame.regions, jigsaw.regions);
+});
+
+test('jigsaw hints and saved-hint revalidation receive the immutable region map', async () => {
+  const game = jigsawGame('jigsaw_hints');
+  const instance = await app({ useRealGame: true, loaded: { ...savedGame(game),
+    currentGames: { normal: null, jigsaw: game }, settings: { mode: 'jigsaw' } } });
+  await waitFor(() => instance.state().cloud.status === 'signed-out');
+  const calls = [];
+  instance.context.findHint = (board, regions) => { calls.push(regions); return { status: 'found', cell: 20, digit: 7 }; };
+  instance.click('resume');
+  instance.click('hint');
+  assert.equal(instance.state().hintCell, 20);
+  assert.equal(instance.state().currentGame.hintsUsed, 1);
+  instance.click('home');
+  instance.click('resume');
+  assert.deepEqual(calls, [game.regions, game.regions]);
+  assert.equal(instance.state().hintCell, 20);
+  assert.equal(instance.state().currentGame.hintsUsed, 1);
+});
+
+test('a mode switch cancels a pending catalog launch and its late success or failure cannot replace either slot', async () => {
+  for (const failure of [false, true]) {
+    const normal = engine.createGame({ puzzleId: 'normal-race', difficulty: '初級', puzzle: '0'.repeat(81) }, { autoFill: false });
+    const jigsaw = jigsawGame('jigsaw_race');
+    const instance = await app({ useRealGame: true, loaded: { ...savedGame(normal),
+      currentGames: { normal, jigsaw }, settings: { mode: 'normal', autoFill: false } } });
+    await waitFor(() => instance.state().cloud.status === 'signed-out');
+    const gate = deferred();
+    const nextJigsaw = { puzzleId: 'jigsaw_race_new', difficulty: '初級', puzzle: '0'.repeat(81), mode: 'jigsaw', regions: jigsaw.regions };
+    instance.context.loadPuzzles = mode => mode === 'normal' ? gate.promise : Promise.resolve([nextJigsaw]);
+    instance.context.choosePuzzle = puzzles => puzzles[0];
+    const pending = instance.evaluate("startNewGame('初級')");
+    assert.equal(instance.state().busy, true);
+    instance.click('settings');
+    instance.click('set-game-mode', { mode: 'jigsaw' });
+    assert.equal(instance.state().busy, false);
+    assert.equal(instance.state().view, 'home');
+    await instance.evaluate("startNewGame('初級')");
+    if (failure) gate.reject(new Error('late normal failure'));
+    else gate.resolve([{ puzzleId: 'normal_stale', difficulty: '初級', puzzle: '0'.repeat(81) }]);
+    await pending;
+    assert.equal(instance.state().currentGame.puzzleId, 'jigsaw_race_new');
+    assert.deepEqual(structuredClone(instance.state().currentGames.normal), normal);
+    assert.equal(instance.state().uiError, '');
+    assert.equal(instance.state().view, 'game');
+  }
+});
+
+test('remote mode hydration or an account change during catalog loading cancels the outdated launch', async () => {
+  for (const change of ['mode', 'account']) {
+    const normal = engine.createGame({ puzzleId: 'normal_cloud_race', difficulty: '初級', puzzle: '0'.repeat(81) }, { autoFill: false });
+    const jigsaw = jigsawGame('jigsaw_cloud_race');
+    const cloud = makeCloud({ initialUser: { uid: 'A' }, settingsDocuments: {
+      A: { ...DEFAULT_SETTINGS, autoFill: false }, B: { ...DEFAULT_SETTINGS, autoFill: false },
+    } });
+    const instance = await app({ cloud, useRealGame: true, loaded: { ...savedGame(normal),
+      currentGames: { normal, jigsaw }, settings: { mode: 'normal', autoFill: false } } });
+    await waitFor(() => instance.state().cloud.status === 'synced');
+    const gate = deferred();
+    instance.context.loadPuzzles = () => gate.promise;
+    instance.context.choosePuzzle = puzzles => puzzles[0];
+    const pending = instance.evaluate("startNewGame('初級')");
+    if (change === 'mode') {
+      cloud.preferences.set('A', { ...DEFAULT_SETTINGS, autoFill: false, mode: 'jigsaw' });
+      instance.click('sync-scores');
+    } else cloud.emit({ uid: 'B' });
+    await waitFor(() => instance.state().cloud.status === 'synced');
+    gate.resolve([{ puzzleId: 'normal_cloud_stale', difficulty: '初級', puzzle: '0'.repeat(81) }]);
+    await pending;
+    assert.equal(instance.state().busy, false);
+    assert.equal(instance.state().view, 'home');
+    assert.equal(instance.state().currentGame.puzzleId, change === 'mode' ? jigsaw.puzzleId : normal.puzzleId);
+    assert.deepEqual(structuredClone(instance.state().currentGames.normal), normal);
+    assert.deepEqual(structuredClone(instance.state().currentGames.jigsaw), jigsaw);
   }
 });

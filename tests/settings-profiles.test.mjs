@@ -6,21 +6,21 @@ import {
 } from '../js/data/settings-profiles.js';
 
 test('missing auto-fill preserves old behavior and invalid booleans use defaults', () => {
-  assert.deepEqual(normalizeSettings({ autoCandidates: false, theme: 'night' }), { autoCandidates: false, autoFill: true, theme: 'night' });
+  assert.deepEqual(normalizeSettings({ autoCandidates: false, theme: 'night' }), { autoCandidates: false, autoFill: true, theme: 'night', mode: 'normal' });
   assert.deepEqual(normalizeSettings({ autoCandidates: 'false', autoFill: 0, theme: 'unknown', board: [] }), DEFAULT_SETTINGS);
-  assert.deepEqual(normalizeSettings({ autoCandidates: false, autoFill: false, theme: 'rose' }), { autoCandidates: false, autoFill: false, theme: 'rose' });
+  assert.deepEqual(normalizeSettings({ autoCandidates: false, autoFill: false, theme: 'rose' }), { autoCandidates: false, autoFill: false, theme: 'rose', mode: 'normal' });
 });
 
 test('legacy selected account values and guest survive normalization, account caches stay isolated', () => {
   const legacy = { autoCandidates: false, autoFill: false, theme: 'night' };
   let profiles = normalizeSettingsProfiles(null, legacy, 'A');
-  assert.deepEqual(getProfileSettings(profiles), legacy);
+  assert.deepEqual(getProfileSettings(profiles), { ...legacy, mode: 'normal' });
   profiles = updateProfileSettings(profiles, 'A', { theme: 'rose' });
   profiles = selectSettingsProfile(profiles, 'B');
-  assert.deepEqual(getProfileSettings(profiles), legacy);
+  assert.deepEqual(getProfileSettings(profiles), { ...legacy, mode: 'normal' });
   profiles = updateProfileSettings(profiles, 'B', { autoFill: true });
   profiles = selectSettingsProfile(profiles, 'guest');
-  assert.deepEqual(getProfileSettings(profiles), legacy);
+  assert.deepEqual(getProfileSettings(profiles), { ...legacy, mode: 'normal' });
   profiles = selectSettingsProfile(profiles, 'A');
   assert.equal(getProfileSettings(profiles).theme, 'rose');
   assert.equal(getSettingsProfile(profiles, 'B').settings.theme, 'night');
@@ -31,12 +31,12 @@ test('remote hydration wins clean fields and applies explicit patches only', () 
   let profiles = selectSettingsProfile(normalizeSettingsProfiles(null), 'A');
   const hydration = captureSettingsSync(profiles, 'A');
   profiles = applySettingsSync(profiles, 'A', { autoCandidates: false, autoFill: false, theme: 'night' }, hydration);
-  assert.deepEqual(getProfileSettings(profiles), { autoCandidates: false, autoFill: false, theme: 'night' });
+  assert.deepEqual(getProfileSettings(profiles), { autoCandidates: false, autoFill: false, theme: 'night', mode: 'normal' });
   profiles = updateProfileSettings(profiles, 'A', { theme: 'rose' });
   const submitted = captureSettingsSync(profiles, 'A');
   assert.deepEqual(submitted.patch, { theme: 'rose' });
   profiles = applySettingsSync(profiles, 'A', { autoCandidates: true, autoFill: true, theme: 'rose' }, submitted);
-  assert.deepEqual(getProfileSettings(profiles), { autoCandidates: true, autoFill: true, theme: 'rose' });
+  assert.deepEqual(getProfileSettings(profiles), { autoCandidates: true, autoFill: true, theme: 'rose', mode: 'normal' });
   assert.deepEqual(getSettingsProfile(profiles, 'A').pending, {});
 });
 
@@ -46,7 +46,7 @@ test('new edits during a request retain field revisions, including the same fiel
   const submitted = captureSettingsSync(profiles, 'A');
   profiles = updateProfileSettings(profiles, 'A', { theme: 'classic', autoFill: false });
   profiles = applySettingsSync(profiles, 'A', { autoCandidates: false, autoFill: true, theme: 'night' }, submitted);
-  assert.deepEqual(getProfileSettings(profiles), { autoCandidates: false, autoFill: false, theme: 'classic' });
+  assert.deepEqual(getProfileSettings(profiles), { autoCandidates: false, autoFill: false, theme: 'classic', mode: 'normal' });
   assert.deepEqual(captureSettingsSync(profiles, 'A').patch, { theme: 'classic', autoFill: false });
   assert.equal(getSettingsProfile(profiles, 'A').pending.theme, 2);
 });

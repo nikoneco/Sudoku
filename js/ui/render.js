@@ -1,11 +1,16 @@
 import { icon } from './icons.js';
-import { THEMES } from '../config.js';
+import { GAME_MODES, THEMES } from '../config.js';
 import { getExperience } from '../data/experience.js';
 import { getLevelTitle } from '../data/level-titles.js';
+import { getModeStats } from '../data/stats.js';
+import { getRegions } from '../game/regions.js';
 
 const html = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[char]));
+
+const modeId = value => value === 'jigsaw' ? 'jigsaw' : 'normal';
+const modeLabel = value => GAME_MODES.find(mode => mode.id === modeId(value))?.label || '通常';
 
 export function formatDuration(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -61,6 +66,7 @@ function homeView(state, difficulties, complete) {
   return `<main class="screen home-screen">
     ${notices(state)}
     <header class="home-header"><h1 class="brand"><span class="brand-stamp" aria-hidden="true"></span>SUDOKU</h1></header>
+    <p class="game-mode-label home-game-mode">${html(modeLabel(state.settings?.mode))}</p>
     ${experience ? `<p class="home-level" aria-label="Lv${experience.level} ${html(getLevelTitle(experience.level))}"><span>Lv${experience.level}</span><span>${html(getLevelTitle(experience.level))}</span></p>` : ''}
     <div class="home-content">
       ${canResume ? `<button class="resume-card" data-action="resume">
@@ -81,10 +87,6 @@ function homeView(state, difficulties, complete) {
   </main>`;
 }
 
-function boxOf(index) {
-  return Math.floor(Math.floor(index / 9) / 3) * 3 + Math.floor((index % 9) / 3);
-}
-
 function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComplete, pad: keypadState, projectedGame }) {
   const completed = isComplete(state.currentGame);
   const game = projectedGame || state.currentGame;
@@ -92,9 +94,10 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
   const selectedValue = game.currentBoard[selected] || 0;
   const selectedRow = Math.floor(selected / 9);
   const selectedCol = selected % 9;
-  const selectedBox = boxOf(selected);
+  const regions = getRegions(game);
+  const selectedRegion = regions[selected];
   const hintCell = Number.isInteger(state.hintCell) && state.hintCell >= 0 && state.hintCell < 81 ? state.hintCell : null;
-  const conflictSet = new Set(conflicts(game.currentBoard));
+  const conflictSet = new Set(conflicts(game.currentBoard, regions));
   const cells = game.currentBoard.map((value, index) => {
     const row = Math.floor(index / 9);
     const col = index % 9;
@@ -102,7 +105,9 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
     const notes = value ? [] : displayed(game, index, state.settings.autoCandidates);
     const includedMask = game.manualIncludedCandidates[index] || 0;
     const classes = ['cell', isGiven ? 'given' : 'editable'];
-    if (row === selectedRow || col === selectedCol || boxOf(index) === selectedBox) classes.push('related');
+    if (row === selectedRow || col === selectedCol || regions[index] === selectedRegion) classes.push('related');
+    if (col < 8 && regions[index] !== regions[index + 1]) classes.push('region-right');
+    if (row < 8 && regions[index] !== regions[index + 9]) classes.push('region-bottom');
     if (selectedValue && value === selectedValue) classes.push('same-number');
     if (index === selected) classes.push('selected');
     if (conflictSet.has(index)) classes.push('conflict');
@@ -141,9 +146,9 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
         <button class="header-button header-button--settings" data-action="settings" aria-label="設定を開く">${icon('settings')}</button>
       </div>
     </header>
-    <div class="game-meta"><span class="game-difficulty">${html(difficulty)}</span><time class="game-timer" aria-label="経過時間">${formatDuration(elapsed)}</time></div>
+    <div class="game-meta"><span class="game-difficulty">${html(difficulty)}<span class="game-mode-label game-mode-inline">${html(modeLabel(game.mode))}</span></span><time class="game-timer" aria-label="経過時間">${formatDuration(elapsed)}</time></div>
     <div class="board-stage">
-      <section class="board" role="grid" aria-label="数独盤面">${cells}</section>
+      <section class="board${game.mode === 'jigsaw' ? ' board--jigsaw' : ''}" role="grid" aria-label="${game.mode === 'jigsaw' ? 'ジグソー数独盤面' : '数独盤面'}">${cells}</section>
       ${completed && state.completionOpen ? completionOverlay(game, state.completionExperience) : ''}
     </div>
     <section class="entry-panel" aria-label="入力"${completed ? ' inert aria-disabled="true"' : ''}>
@@ -185,6 +190,7 @@ function accountSection(state) {
 }
 
 function settingsView(state) {
+  const modes = GAME_MODES.map(mode => `<button class="game-mode-option" data-action="set-game-mode" data-mode="${html(mode.id)}" aria-pressed="${modeId(state.settings.mode) === mode.id}"${state.storageReady === false || state.sessionBlocked ? ' disabled' : ''}>${html(mode.label)}</button>`).join('');
   const themes = THEMES.map((theme) => `<button class="theme-option" data-action="set-theme" data-theme="${html(theme.id)}" aria-pressed="${state.settings.theme === theme.id}">
     <span class="theme-swatch" style="--swatch-color:${html(theme.color)};--swatch-paper:${html(theme.paper)}" aria-hidden="true"></span>
     <span class="theme-label">${html(theme.label)}</span>
@@ -194,6 +200,11 @@ function settingsView(state) {
     ${pageHeader('設定')}
     <div class="simple-content">
       <div class="settings-list">
+        <section class="game-mode-setting" aria-labelledby="game-mode-setting-label">
+          <h2 class="setting-label" id="game-mode-setting-label">数独の種類</h2>
+          <div class="game-mode-options" role="group" aria-labelledby="game-mode-setting-label">${modes}</div>
+          <p class="game-mode-description">切り替えるとホームへ戻ります。つづきは種類ごとに保存します。</p>
+        </section>
         <div class="setting-row">
           <span class="setting-label" id="auto-candidates-label">自動候補表示</span>
           <button class="switch" role="switch" aria-checked="${Boolean(state.settings.autoCandidates)}" aria-labelledby="auto-candidates-label" data-action="toggle-auto"></button>
@@ -214,7 +225,7 @@ function settingsView(state) {
 }
 
 function statsView(state, difficulties) {
-  const stats = state.stats;
+  const stats = getModeStats(state.stats, modeId(state.settings?.mode));
   const items = difficulties.map((difficulty) => {
     const value = stats.byDifficulty?.[difficulty] || { clears: 0, bestTime: null };
     const best = Number.isFinite(value.bestTime) ? formatDuration(value.bestTime) : '—';
@@ -224,6 +235,7 @@ function statsView(state, difficulties) {
     ${notices(state)}
     ${pageHeader('成績')}
     <div class="simple-content">
+      <p class="game-mode-label stats-game-mode">${html(modeLabel(state.settings?.mode))}</p>
       <div class="stats-total"><span class="stats-total-label">クリア数</span><strong class="stats-total-value">${Math.max(0, Number(stats.totalClears) || 0)}</strong></div>
       <div class="stats-list" aria-label="難易度別成績">${items}</div>
       ${accountSection(state)}

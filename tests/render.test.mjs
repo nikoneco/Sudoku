@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderApp } from '../js/ui/render.js';
 import { getKeypadState } from '../js/ui/keypad.js';
-import { THEMES } from '../js/config.js';
+import { GAME_MODES, THEMES } from '../js/config.js';
+import { NORMAL_REGIONS } from '../js/game/regions.js';
 import { createGame, getDisplayedCandidates, getConflicts, isComplete } from '../js/game/engine.js';
 
 test('completion is a dismissible result over the full board, with input disabled', () => {
@@ -193,4 +194,60 @@ test('hint messages are visible and escaped without opening an overlay', () => {
   renderApp(root, state, [], helpers);
   assert.match(root.innerHTML, /&lt;script&gt;/);
   assert.doesNotMatch(root.innerHTML, /<span class="hint-feedback" role="status"><script>/);
+});
+
+test('Sudoku mode settings expose both modes and current home and stats labels', () => {
+  const root = { scrollTop: 0, querySelector: () => null };
+  const state = { view: 'settings', settings: { mode: 'jigsaw' }, stats: { records: {
+    normal_score: { difficulty: '初級', elapsedTime: 20 },
+    jigsaw_score: { difficulty: '初級', elapsedTime: 70 },
+  } } };
+  renderApp(root, state, ['初級'], {});
+  for (const mode of GAME_MODES) {
+    assert.match(root.innerHTML, new RegExp(`data-mode="${mode.id}" aria-pressed="${mode.id === 'jigsaw'}"`));
+  }
+  assert.match(root.innerHTML, /つづきは種類ごとに保存/);
+  state.view = 'home';
+  renderApp(root, state, ['初級'], { isComplete: () => false });
+  assert.match(root.innerHTML, /home-game-mode">ジグソー<\/p>/);
+  state.view = 'stats';
+  renderApp(root, state, ['初級'], {});
+  assert.match(root.innerHTML, /stats-game-mode">ジグソー<\/p>/);
+  assert.match(root.innerHTML, /stats-total-value">1<\/strong>/);
+  assert.match(root.innerHTML, /stats-best">01:10<\/span>/);
+  state.settings.mode = 'normal';
+  renderApp(root, state, ['初級'], {});
+  assert.match(root.innerHTML, /stats-game-mode">通常<\/p>/);
+  assert.match(root.innerHTML, /stats-best">00:20<\/span>/);
+  assert.equal(Object.keys(state.stats.records).length, 2);
+});
+
+test('jigsaw boundaries, related cells, conflicts and displayed notes follow the board region map in every theme', () => {
+  const regions = [...NORMAL_REGIONS];
+  [regions[2], regions[12]] = [regions[12], regions[2]];
+  const game = createGame({ puzzleId: 'jigsaw_render', difficulty: '初級', puzzle: '0'.repeat(81),
+    mode: 'jigsaw', regions: regions.join('') }, { autoFill: false });
+  game.currentBoard[14] = 7;
+  const root = { scrollTop: 0, querySelector: () => null };
+  const state = { view: 'game', currentGame: game, selectedCell: 2,
+    inputMode: 'memo', settings: { mode: 'normal', autoCandidates: true } };
+  let conflictRegions;
+  const helpers = { isComplete, displayed: getDisplayedCandidates, elapsed: 0, pad: getKeypadState,
+    conflicts: (board, value) => { conflictRegions = value; return getConflicts(board, value); } };
+  const cell = index => [...root.innerHTML.matchAll(/<button class="cell[^>]*>/g)]
+    .map(match => match[0]).find(markup => markup.includes(`data-cell="${index}"`));
+  for (const theme of THEMES) {
+    state.settings.theme = theme.id;
+    renderApp(root, state, ['初級'], helpers);
+    assert.match(root.innerHTML, /class="board board--jigsaw" role="grid" aria-label="ジグソー数独盤面"/);
+    assert.match(root.innerHTML, /game-mode-inline">ジグソー<\/span>/);
+    assert.equal(conflictRegions, game.regions);
+    assert.match(cell(1), /region-right/);
+    assert.doesNotMatch(cell(2), /region-right/);
+    assert.match(cell(2), /region-bottom/);
+    assert.match(cell(14), /related/);
+    assert.doesNotMatch(cell(9), /related/);
+    assert.match(cell(2), /候補 1、2、3、4、5、6、8、9/);
+    assert.equal((root.innerHTML.match(/role="gridcell"/g) || []).length, 81);
+  }
 });

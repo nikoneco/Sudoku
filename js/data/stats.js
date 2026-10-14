@@ -109,6 +109,25 @@ export function emptyStats() {
   return { clearedIds: [], byDifficulty: {}, totalClears: 0, records: {}, legacyBest: {}, experienceEvents: {} };
 }
 
+/** Project only the selected mode's records; XP remains shared across both modes. */
+export function getModeStats(stats, mode = 'normal') {
+  const all = normalizeStats(stats);
+  const isJigsaw = id => id.startsWith('jigsaw_');
+  const belongs = id => isJigsaw(id) === (mode === 'jigsaw');
+  const records = Object.fromEntries(Object.entries(all.records).filter(([id]) => belongs(id)));
+  const clearedIds = new Set(all.clearedIds.filter(belongs));
+  const countFloors = {};
+  const jigsawCounts = recordCounts(Object.fromEntries(Object.entries(all.records).filter(([id]) => isJigsaw(id))));
+  if (mode !== 'jigsaw') {
+    for (const difficulty of DIFFICULTIES) countFloors[difficulty] = Math.max(0, (all.byDifficulty[difficulty]?.clears || 0) - jigsawCounts[difficulty]);
+  }
+  return {
+    ...makeAggregate(records, mode === 'jigsaw' ? {} : all.legacyBest, clearedIds,
+      mode === 'jigsaw' ? clearedIds.size : all.totalClears - all.clearedIds.filter(isJigsaw).length, countFloors),
+    experienceEvents: all.experienceEvents,
+  };
+}
+
 /** Normalize legacy totals and score records into a safe, deterministic shape. */
 export function normalizeStats(stats, puzzles = []) {
   const source = isObject(stats) ? stats : {};

@@ -1,5 +1,9 @@
 export const API_URL = 'https://script.google.com/macros/s/AKfycby6ykGnQyXZJSl7cegHBVyfpin2recTG6mbpWHQ2MOmTfVUfD20HWggqfWC0jdwumFtQw/exec';
 export const DATASET_VERSION = 2;
+export const GAME_MODES = Object.freeze([
+  { id: 'normal', label: '通常' },
+  { id: 'jigsaw', label: 'ジグソー' },
+]);
 export const DIFFICULTIES = Object.freeze(['初級', '中級', '上級', '超上級']);
 export const THEMES = Object.freeze([
   { id: 'classic', label: 'クラシック', color: '#316e78', paper: '#f7f5ef' },

@@ -57,3 +57,6 @@ jobs:
       - name: Validate all puzzles
         if: steps.puzzle-scope.outputs.required == 'true'
         run: node tools/validate-puzzles.mjs --client-only
+      - name: Validate all jigsaw puzzles
+        if: steps.puzzle-scope.outputs.required == 'true'
+        run: node tools/validate-jigsaw.mjs --client-only

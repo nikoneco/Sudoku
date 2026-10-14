@@ -11,6 +11,7 @@ import {
   transact,
   undo,
 } from "../js/game/engine.js";
+import { NORMAL_REGIONS } from "../js/game/regions.js";
 
 const BLANK_PUZZLE = "0".repeat(81);
 
@@ -583,4 +584,142 @@ test("no-op actions preserve object identity", () => {
   assert.throws(() => transact(game, { type: "toggleCandidate", cell: 0, value: 10 }), RangeError);
   assert.equal(undo(game), game);
   assert.equal(redo(game), game);
+});
+
+function irregularRegions() {
+  const regions = [...NORMAL_REGIONS];
+  [regions[2], regions[12]] = [regions[12], regions[2]];
+  return regions.join("");
+}
+
+function jigsawPuzzle(entries = {}) {
+  return { ...puzzle(entries), puzzleId: "jigsaw_engine-test", mode: "jigsaw", regions: irregularRegions() };
+}
+
+test("irregular candidate and conflict APIs replace 3 by 3 constraints", () => {
+  const regions = irregularRegions();
+  const board = Array(81).fill(0);
+  board[13] = 8;
+  assert.ok(getLegalCandidates(board, 2).includes(8));
+  assert.ok(!getLegalCandidates(board, 2, regions).includes(8));
+  board[2] = 8;
+  assert.deepEqual(getConflicts(board), []);
+  assert.deepEqual(getConflicts(board, regions), [2, 13]);
+
+  board[13] = 0;
+  board[10] = 8;
+  assert.deepEqual(getConflicts(board), [2, 10]);
+  assert.deepEqual(getConflicts(board, regions), []);
+  board[2] = 0;
+  assert.ok(!getLegalCandidates(board, 2).includes(8));
+  assert.ok(getLegalCandidates(board, 2, regions).includes(8));
+
+  const game = createGame(jigsawPuzzle({ 13: 8 }), { autoFill: false });
+  assert.ok(!getEffectiveCandidates(game, 2).includes(8));
+  assert.ok(!getDisplayedCandidates(game, 2).includes(8));
+  const noted = transact(game, { type: "toggleCandidate", cell: 2, value: 8, autoCandidates: false });
+  assert.deepEqual(getDisplayedCandidates(noted, 2, false), [8]);
+  assert.ok(getDisplayedCandidates(noted, 2).includes(8));
+  assert.ok(!getEffectiveCandidates(noted, 2).includes(8));
+  assert.deepEqual(noted.lastAutoFilled, []);
+});
+
+test("jigsaw initial and transaction closure use the saved regions, with one undo step", () => {
+  const entries = { 0: 1, 1: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7 };
+  const normal = createGame(puzzle({ ...entries, 13: 8 }));
+  const initial = createGame(jigsawPuzzle({ ...entries, 13: 8 }));
+  assert.equal(normal.currentBoard[2], 0);
+  assert.equal(initial.currentBoard[2], 9);
+  assert.equal(initial.currentBoard[8], 8);
+  assert.deepEqual(initial.lastAutoFilled, [2, 8]);
+  assert.equal(initial.undoStack.length, 0);
+
+  const game = createGame(jigsawPuzzle(entries));
+  const changed = transact(game, { type: "set", cell: 13, value: 8 });
+  assert.deepEqual(changed.lastAutoFilled, [2, 8]);
+  assert.equal(changed.undoStack.length, 1);
+  assert.equal(changed.sources[13], "manual");
+  assert.equal(changed.sources[2], "auto");
+  const restored = undo(JSON.parse(JSON.stringify(changed)));
+  assert.deepEqual(restored.currentBoard, game.currentBoard);
+  assert.equal(restored.mode, "jigsaw");
+  assert.equal(restored.regions, game.regions);
+  const repeated = redo(restored);
+  assert.deepEqual(repeated.currentBoard, changed.currentBoard);
+  assert.equal(repeated.regions, game.regions);
+  assert.equal(repeated.mode, "jigsaw");
+  assert.deepEqual(game.currentBoard, createGame(jigsawPuzzle(entries)).currentBoard);
+});
+
+test("jigsaw candidate exclusions can close naked singles but hidden singles never fill", () => {
+  const game = createGame(jigsawPuzzle({ 13: 8 }));
+  let changed = game;
+  for (const value of [1, 2, 3, 4, 5, 6, 7]) {
+    changed = transact(changed, { type: "toggleCandidate", cell: 2, value });
+  }
+  assert.equal(changed.currentBoard[2], 9);
+  assert.deepEqual(changed.lastAutoFilled, [2]);
+  assert.equal(undo(changed).currentBoard[2], 0);
+
+  const hidden = createGame(jigsawPuzzle({ 3: 2, 4: 3, 5: 4, 13: 5, 14: 6, 18: 1, 21: 7 }));
+  assert.deepEqual(getEffectiveCandidates(hidden, 2), [1, 8, 9]);
+  for (let cell = 0; cell < 81; cell += 1) {
+    if (cell !== 2 && hidden.regions[cell] === hidden.regions[2]) {
+      assert.equal(getEffectiveCandidates(hidden, cell).includes(1), false);
+    }
+  }
+  assert.equal(hidden.currentBoard[2], 0);
+  assert.deepEqual(hidden.lastAutoFilled, []);
+});
+
+test("jigsaw DEL and clearNotes do not close singles and preserve immutable rules through history", () => {
+  const game = createGame(jigsawPuzzle({ 0: 1, 1: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 13: 8 }));
+  const deleted = transact(game, { type: "delete", cell: 2 });
+  assert.equal(deleted.currentBoard[2], 0);
+  assert.deepEqual(getEffectiveCandidates(deleted, 2), [9]);
+  assert.deepEqual(deleted.lastAutoFilled, []);
+  assert.equal(deleted.regions, game.regions);
+  const cleared = transact(deleted, { type: "clearNotes", cell: 2 });
+  assert.equal(cleared.currentBoard[2], 0);
+  assert.deepEqual(cleared.lastAutoFilled, []);
+  assert.deepEqual(getDisplayedCandidates(cleared, 2), []);
+  assert.deepEqual(getEffectiveCandidates(undo(cleared), 2), [9]);
+  assert.equal(redo(undo(cleared)).regions, game.regions);
+
+  const wrong = transact(createGame(jigsawPuzzle({ 13: 8 })), { type: "set", cell: 2, value: 8 });
+  assert.equal(wrong.currentBoard[2], 8);
+  assert.deepEqual(getConflicts(wrong.currentBoard, wrong.regions), [2, 13]);
+  const memo = transact(wrong, { type: "toggleCandidate", cell: 2, value: 9 });
+  assert.equal(memo.currentBoard[2], 0);
+  assert.deepEqual(getDisplayedCandidates(memo, 2), [8, 9]);
+  assert.deepEqual(getEffectiveCandidates(memo, 2), [9]);
+  assert.deepEqual(memo.lastAutoFilled, []);
+  assert.equal(undo(memo).currentBoard[2], 8);
+});
+
+test("completion uses a jigsaw game's own regions after JSON reload", () => {
+  const regions = Array.from({ length: 9 }, (_, row) => String(row).repeat(9)).join("");
+  const latin = Array.from({ length: 81 }, (_, cell) => (Math.floor(cell / 9) + cell % 9) % 9 + 1);
+  const game = createGame({ ...puzzle(), mode: "jigsaw", regions }, { autoFill: false });
+  game.currentBoard = latin;
+  assert.ok(getConflicts(latin).length > 0);
+  assert.deepEqual(getConflicts(latin, regions), []);
+  assert.equal(isComplete(JSON.parse(JSON.stringify(game))), true);
+  const invalid = { ...game, currentBoard: solvedGrid(), regions: irregularRegions() };
+  assert.deepEqual(getConflicts(invalid.currentBoard), []);
+  assert.equal(isComplete(invalid), false);
+});
+
+test("invalid game region metadata is rejected instead of silently applying normal rules", () => {
+  for (const data of [
+    { mode: "jigsaw" }, { mode: "jigsaw", regions: "0".repeat(81) },
+    { mode: "normal", regions: irregularRegions() }, { regions: irregularRegions() },
+  ]) assert.throws(() => createGame({ ...puzzle(), ...data }), TypeError);
+  const corrupted = { ...blankGame(), mode: "jigsaw" };
+  assert.throws(() => getEffectiveCandidates(corrupted, 0), TypeError);
+  assert.throws(() => transact(corrupted, { type: "delete", cell: 0 }), TypeError);
+  assert.throws(() => undo(corrupted), TypeError);
+  assert.throws(() => isComplete(corrupted), TypeError);
+  assert.throws(() => getLegalCandidates(Array(81).fill(0), 0, "0".repeat(81)), TypeError);
+  assert.throws(() => getConflicts(Array(81).fill(0), "0".repeat(81)), TypeError);
 });

@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'sudoku-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v1.5.3`;
+const CACHE_NAME = `${CACHE_PREFIX}v1.6.0`;
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -18,6 +18,7 @@ const SHELL_ASSETS = [
   './js/data/score-profiles.js',
   './js/data/settings-profiles.js',
   './js/game/engine.js',
+  './js/game/regions.js',
   './js/game/hints.js',
   './js/data/storage.js',
   './js/data/puzzle-repository.js',
@@ -26,6 +27,7 @@ const SHELL_ASSETS = [
   './js/ui/render.js',
   './js/ui/keypad.js',
   './data/puzzles.json',
+  './data/puzzles-jigsaw.json',
   './icons/app-icon.svg',
   './icons/app-icon-180.png',
   './icons/app-icon-192.png',

@@ -1,5 +1,13 @@
 # データモデル
 
+## 種類の追加（1.6.0）
+
+- 設定 `mode` は normal／jigsaw。既存値の欠落はnormal。端末appは `currentGames:{normal,jigsaw}` に各1件と、互換用の `currentGame` を保持。途中盤面・領域・履歴はクラウドへ送らない。
+- ジグソー問題は `mode:'jigsaw'`、`regions`（0〜8の81文字）を追加し、IDは `jigsaw_` 接頭辞。成績の既存問題ID空間で両種類を保持し、画面では種類ごとに集計する。旧集計・旧ベストは通常へ帰属。経験値イベントは両種類で共通。
+- `preferences/app` の旧3項目を維持し、別の `users/{uid}/preferences/mode` に `{mode}` を同期。新旧アプリが同居しても旧版による設定書込みでmodeを消さない。
+- `Puzzles_Jigsaw` はPuzzlesの12管理列＋M列 `regions`。`puzzle`・`solution`・`regions` は文字列で先頭0を維持。公開時はpuzzleId/difficulty/puzzle/mode/regionsだけを返す。Configの `jigsaw_dataset_version=1`、同梱 `data/puzzles-jigsaw.json` と独立キャッシュ `dataset-jigsaw` を使用。
+- Levelsシートおよび称号定義は本機能の対象外。
+
 ## 端末内
 IndexedDB `sudoku-v1` / object store `kv`。
 

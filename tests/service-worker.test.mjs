@@ -25,11 +25,13 @@ test('service worker reads only its named cache and bypasses stale HTTP assets d
     listeners.fetch({ request: { method: 'GET', mode, url: 'https://example.test/Sudoku/index.html' }, respondWith: promise => { response = promise; } });
     assert.equal(await response, 'current-sudoku');
   }
-  assert.ok(requestedCaches.every(name => name === 'sudoku-shell-v1.5.3'));
+  assert.ok(requestedCaches.every(name => name === 'sudoku-shell-v1.6.0'));
   for (const asset of ['data/experience.js', 'data/level-titles.js', 'data/settings-profiles.js', 'ui/experience-animation.js', 'ui/play-feedback.js', 'ui/auto-fill-presentation.js']) {
     assert.ok(installRequests.some(request => request.url.endsWith(`/js/${asset}`)));
   }
   assert.ok(installRequests.some(request => request.url.endsWith('/js/ui/keypad.js')));
+  assert.ok(installRequests.some(request => request.url.endsWith('/js/game/regions.js')));
+  assert.ok(installRequests.some(request => request.url.endsWith('/data/puzzles-jigsaw.json')));
   let intercepted = false;
   listeners.fetch({ request: { method: 'GET', mode: 'cors', url: 'https://example.test/OtherApp/' }, respondWith: () => { intercepted = true; } });
   assert.equal(intercepted, false);

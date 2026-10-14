@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createGame, getConflicts, getEffectiveCandidates, getLegalCandidates } from "../js/game/engine.js";
 import { findHint } from "../js/game/hints.js";
+import { getUnits, NORMAL_REGIONS } from "../js/game/regions.js";
 
 const rowUnit = row => Array.from({ length: 9 }, (_, column) => row * 9 + column);
 const columnUnit = column => Array.from({ length: 9 }, (_, row) => row * 9 + column);
@@ -159,4 +160,37 @@ test("incompatible unique-location assignments to the same cell return conflict"
   assert.deepEqual(locations(board, firstBox, 1), [0]);
   assert.deepEqual(locations(board, firstBox, 2), [0]);
   assert.deepEqual(findHint(board), { status: "conflict" });
+});
+
+function irregularRegions() {
+  const regions = [...NORMAL_REGIONS];
+  [regions[2], regions[12]] = [regions[12], regions[2]];
+  return regions.join("");
+}
+
+test("jigsaw hidden-single hints inspect the irregular region instead of its former box", () => {
+  const regions = irregularRegions();
+  const board = makeBoard({ 3: 2, 4: 3, 5: 4, 13: 5, 14: 6, 21: 7, 22: 8, 32: 1 });
+  const possible = unit => unit.filter(cell => getLegalCandidates(board, cell, regions).includes(1));
+  assert.deepEqual(possible(getUnits(regions)[19]), [2]);
+  assert.ok(possible(rowUnit(0)).length > 1);
+  assert.ok(possible(columnUnit(2)).length > 1);
+  assert.deepEqual(getLegalCandidates(board, 2, regions), [1, 9]);
+  const before = [...board];
+  assert.deepEqual(findHint(Object.freeze(board), regions), { status: "found", cell: 2, digit: 1 });
+  assert.deepEqual(findHint(board), { status: "found", cell: 12, digit: 1 });
+  assert.deepEqual(board, before);
+});
+
+test("jigsaw contradictions respect region peers and malformed regions refuse hints", () => {
+  const regions = irregularRegions();
+  const irregularDuplicate = makeBoard({ 2: 8, 13: 8 });
+  assert.deepEqual(getConflicts(irregularDuplicate), []);
+  assert.deepEqual(findHint(irregularDuplicate, regions), { status: "conflict" });
+  const oldBoxDuplicate = makeBoard({ 2: 8, 10: 8 });
+  assert.deepEqual(findHint(oldBoxDuplicate), { status: "conflict" });
+  assert.deepEqual(findHint(oldBoxDuplicate, regions), { status: "none" });
+  for (const invalid of [null, "", "0".repeat(81), NORMAL_REGIONS.replace("0", "9")]) {
+    assert.deepEqual(findHint(Array(81).fill(0), invalid), { status: "conflict" });
+  }
 });

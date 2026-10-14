@@ -311,16 +311,16 @@ test('settings hydrate existing remote values without writing fresh local defaul
   const { state, sdkLoader } = makeSdk({ documents: { 'users/account-a/preferences/app': remote } });
   const client = await createFirebaseClient({ sdkLoader });
   const settings = await client.syncSettings('account-a', { autoCandidates: true, autoFill: true, theme: 'classic' });
-  assert.deepEqual(settings, remote);
-  assert.deepEqual(state.writes, []);
+  assert.deepEqual(settings, { ...remote, mode: 'normal' });
+  assert.deepEqual(state.writes, [{ path: 'users/account-a/preferences/mode', data: { mode: 'normal' } }]);
 });
 
 test('missing remote preferences are seeded from local values with only the three allowed fields', async () => {
   const { state, sdkLoader } = makeSdk();
   const client = await createFirebaseClient({ sdkLoader });
   const local = { autoCandidates: false, autoFill: false, theme: 'rose', currentBoard: [], email: 'private' };
-  assert.deepEqual(await client.syncSettings('account-a', local), { autoCandidates: false, autoFill: false, theme: 'rose' });
-  assert.deepEqual(state.writes, [{ path: 'users/account-a/preferences/app', data: { autoCandidates: false, autoFill: false, theme: 'rose' } }]);
+  assert.deepEqual(await client.syncSettings('account-a', local), { autoCandidates: false, autoFill: false, theme: 'rose', mode: 'normal' });
+  assert.deepEqual(state.writes, [{ path: 'users/account-a/preferences/app', data: { autoCandidates: false, autoFill: false, theme: 'rose' } }, { path: 'users/account-a/preferences/mode', data: { mode: 'normal' } }]);
 });
 
 test('settings transaction preserves concurrent fields while later successful same-field patches win', async () => {
@@ -332,9 +332,9 @@ test('settings transaction preserves concurrent fields while later successful sa
   });
   const client = await createFirebaseClient({ sdkLoader });
   const stale = { autoCandidates: true, autoFill: true, theme: 'classic' };
-  assert.deepEqual(await client.syncSettings('account-a', stale, { theme: 'night' }), { autoCandidates: false, autoFill: false, theme: 'night' });
-  assert.deepEqual(await client.syncSettings('account-a', stale, { theme: 'rose' }), { autoCandidates: false, autoFill: false, theme: 'rose' });
-  assert.equal(state.writes.length, 2);
+  assert.deepEqual(await client.syncSettings('account-a', stale, { theme: 'night' }), { autoCandidates: false, autoFill: false, theme: 'night', mode: 'normal' });
+  assert.deepEqual(await client.syncSettings('account-a', stale, { theme: 'rose' }), { autoCandidates: false, autoFill: false, theme: 'rose', mode: 'normal' });
+  assert.equal(state.writes.length, 3);
 });
 
 test('settings reject invalid patches, malformed remote data and changed authentication without writes', async () => {
@@ -353,4 +353,23 @@ test('settings reject invalid patches, malformed remote data and changed authent
   const guarded = await createFirebaseClient({ sdkLoader: changing.sdkLoader });
   await assert.rejects(guarded.syncSettings('account-a', {}, { autoFill: false }), /auth-changed/);
   assert.deepEqual(changing.state.writes, []);
+});
+
+test('mode synchronization preserves old-client preferences and rereads concurrent mode changes', async () => {
+  const base = { autoCandidates: true, autoFill: true, theme: 'classic' };
+  const { state, sdkLoader } = makeSdk({ documents: {
+    'users/account-a/preferences/app': base,
+    'users/account-a/preferences/mode': { mode: 'jigsaw' },
+  }, beforeTransaction(current, count) {
+    if (count === 2) current.documents.set('users/account-a/preferences/mode', { mode: 'normal' });
+  } });
+  const client = await createFirebaseClient({ sdkLoader });
+  assert.deepEqual(await client.syncSettings('account-a', { ...base, mode: 'normal' }), { ...base, mode: 'jigsaw' });
+  assert.equal(state.writes.length, 0);
+  const updated = await client.syncSettings('account-a', { ...base, mode: 'jigsaw' }, { theme: 'night' });
+  assert.equal(updated.mode, 'normal');
+  assert.deepEqual(state.documents.get('users/account-a/preferences/app'), { ...base, theme: 'night' });
+  await client.syncSettings('account-a', updated, { mode: 'jigsaw' });
+  assert.deepEqual(state.documents.get('users/account-a/preferences/mode'), { mode: 'jigsaw' });
+  assert.equal(Object.hasOwn(state.documents.get('users/account-a/preferences/app'), 'mode'), false);
 });

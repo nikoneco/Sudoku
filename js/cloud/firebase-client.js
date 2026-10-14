@@ -207,17 +207,27 @@ export async function createFirebaseClient({ sdkLoader = loadFirebaseSdk } = {})
       const local = normalizeSettings(localSettings);
       const patch = validateSettingsPatch(pendingPatch);
       const preferencesRef = firestoreSdk.doc(database, 'users', uid, 'preferences', 'app');
+      // Keep the old three-field document compatible with already installed clients.
+      const modeRef = firestoreSdk.doc(database, 'users', uid, 'preferences', 'mode');
       // The transaction rereads every retry so a stale device only replaces its edited fields.
       const result = await firestoreSdk.runTransaction(database, async (transaction) => {
         assertCurrentUser(uid);
         const snapshot = await transaction.get(preferencesRef);
+        const modeSnapshot = await transaction.get(modeRef);
         assertCurrentUser(uid);
         const existing = snapshot.exists() ? snapshot.data() : null;
-        if (snapshot.exists() && !isValidSettings(existing)) throw new Error('invalid-remote-settings');
-        const settings = { ...(existing || local), ...patch };
-        if (!existing || Object.keys(patch).some(field => existing[field] !== settings[field])) {
+        const modeData = modeSnapshot.exists() ? modeSnapshot.data() : null;
+        if (snapshot.exists() && (!hasExactKeys(existing, ['autoCandidates', 'autoFill', 'theme']) || !isValidSettings(existing))) throw new Error('invalid-remote-settings');
+        if (modeData && (!hasExactKeys(modeData, ['mode']) || !['normal', 'jigsaw'].includes(modeData.mode))) throw new Error('invalid-remote-settings');
+        const settings = { ...normalizeSettings(existing || local), mode: modeData?.mode ?? local.mode, ...patch };
+        const { mode, ...baseSettings } = settings;
+        if (!existing || Object.keys(baseSettings).some(field => existing[field] !== baseSettings[field])) {
           assertCurrentUser(uid);
-          transaction.set(preferencesRef, settings);
+          transaction.set(preferencesRef, baseSettings);
+        }
+        if (!modeData || modeData.mode !== mode) {
+          assertCurrentUser(uid);
+          transaction.set(modeRef, { mode });
         }
         return settings;
       });

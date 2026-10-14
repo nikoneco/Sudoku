@@ -473,6 +473,10 @@ button:focus-visible {
 }
 
 .game-difficulty { color: var(--ink-soft); font-size: 14px; font-weight: 560; }
+.game-mode-label { color: var(--ink-soft); font-size: 12px; font-weight: 560; letter-spacing: .04em; }
+.home-game-mode { margin: 4px 0 12px; text-align: center; }
+.game-mode-inline { margin-left: 10px; }
+.stats-game-mode { margin: 0 0 12px; }
 .game-timer { min-width: 5ch; color: var(--ink); font-size: 18px; font-variant-numeric: tabular-nums; letter-spacing: .03em; text-align: right; }
 
 .board-stage {
@@ -526,6 +530,15 @@ button:focus-visible {
 .cell:nth-child(n + 46):nth-child(-n + 54) { border-bottom-width: 2px; }
 .cell:nth-child(3n) { border-right-width: 1px; }
 .cell:nth-child(3n + 1) { border-left: 0; }
+
+.board--jigsaw .cell {
+  border-right: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+.board--jigsaw .cell.region-right { border-right: 2px solid var(--ink); }
+.board--jigsaw .cell.region-bottom { border-bottom: 2px solid var(--ink); }
+.board--jigsaw .cell:nth-child(9n) { border-right: 0; }
+.board--jigsaw .cell:nth-child(n + 73) { border-bottom: 0; }
 
 .cell::after {
   position: absolute;
@@ -748,6 +761,12 @@ button:focus-visible {
 .settings-link .icon { color: var(--ink-soft); }
 
 .theme-setting { padding: 20px 0; border-bottom: 1px solid var(--line); }
+.game-mode-setting { padding: 8px 0 20px; border-bottom: 1px solid var(--line); }
+.game-mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.game-mode-option { min-height: 44px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--ink-soft); background: var(--paper); font: inherit; cursor: pointer; }
+.game-mode-option[aria-pressed="true"] { border-color: var(--teal); color: var(--teal); background: var(--teal-soft); font-weight: 650; }
+.game-mode-option:disabled { opacity: .5; cursor: default; }
+.game-mode-description { margin: 10px 0 0; color: var(--ink-soft); font-size: 12px; line-height: 1.6; }
 .theme-setting h2 { margin: 0 0 14px; }
 .theme-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .theme-option { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; text-align: left; cursor: pointer; font-size: 14px; }

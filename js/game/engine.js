@@ -1,6 +1,7 @@
+import { getRegions, getUnits, isValidRegions, NORMAL_REGIONS } from "./regions.js";
+
 const CELL_COUNT = 81;
 const SIDE = 9;
-const BOX_SIDE = 3;
 const ALL_DIGITS_MASK = (1 << SIDE) - 1;
 const HISTORY_LIMIT = 100;
 
@@ -53,6 +54,7 @@ function assertGame(game) {
   if (!Array.isArray(game.undoStack) || !Array.isArray(game.redoStack)) {
     throw new TypeError("undoStack and redoStack must be arrays");
   }
+  return getRegions(game);
 }
 
 function digitsFromMask(mask) {
@@ -63,30 +65,26 @@ function digitsFromMask(mask) {
   return digits;
 }
 
-function peerIndices(cell) {
+function peerIndices(cell, regions) {
   const row = Math.floor(cell / SIDE);
   const column = cell % SIDE;
-  const boxRow = Math.floor(row / BOX_SIDE) * BOX_SIDE;
-  const boxColumn = Math.floor(column / BOX_SIDE) * BOX_SIDE;
   const peers = new Set();
 
   for (let offset = 0; offset < SIDE; offset += 1) {
     peers.add(row * SIDE + offset);
     peers.add(offset * SIDE + column);
   }
-  for (let rowOffset = 0; rowOffset < BOX_SIDE; rowOffset += 1) {
-    for (let columnOffset = 0; columnOffset < BOX_SIDE; columnOffset += 1) {
-      peers.add((boxRow + rowOffset) * SIDE + boxColumn + columnOffset);
-    }
+  for (let peer = 0; peer < CELL_COUNT; peer += 1) {
+    if (regions[peer] === regions[cell]) peers.add(peer);
   }
   peers.delete(cell);
   return peers;
 }
 
-function legalMaskForBoard(board, cell) {
+function legalMaskForBoard(board, cell, regions) {
   if (board[cell] !== 0) return 0;
   let occupied = 0;
-  for (const peer of peerIndices(cell)) {
+  for (const peer of peerIndices(cell, regions)) {
     const value = board[peer];
     if (value !== 0) occupied |= bitFor(value);
   }
@@ -94,17 +92,18 @@ function legalMaskForBoard(board, cell) {
 }
 
 /** Return the legal Sudoku digits for an empty cell, in ascending order. */
-export function getLegalCandidates(board, cell) {
+export function getLegalCandidates(board, cell, regions = NORMAL_REGIONS) {
   assertBoard(board);
   assertCell(cell);
-  return digitsFromMask(legalMaskForBoard(board, cell));
+  if (!isValidRegions(regions)) throw new TypeError("regions must be nine connected groups of nine cells");
+  return digitsFromMask(legalMaskForBoard(board, cell, regions));
 }
 
 /** Return legal candidates after explicit exclusions, regardless of display settings. */
 export function getEffectiveCandidates(game, cell) {
-  assertGame(game);
+  const regions = assertGame(game);
   assertCell(cell);
-  const legal = legalMaskForBoard(game.currentBoard, cell);
+  const legal = legalMaskForBoard(game.currentBoard, cell, regions);
   return digitsFromMask(legal & ~game.manualExcludedCandidates[cell]);
 }
 
@@ -114,13 +113,13 @@ export function getEffectiveCandidates(game, cell) {
  * legal only; exclusions take precedence in both display modes.
  */
 export function getDisplayedCandidates(game, cell, autoCandidates = true) {
-  assertGame(game);
+  const regions = assertGame(game);
   assertCell(cell);
   if (typeof autoCandidates !== "boolean") {
     throw new TypeError("autoCandidates must be a boolean");
   }
   if (game.currentBoard[cell] !== 0) return [];
-  const legal = legalMaskForBoard(game.currentBoard, cell);
+  const legal = legalMaskForBoard(game.currentBoard, cell, regions);
   const notExcluded = ~game.manualExcludedCandidates[cell];
   const visible = autoCandidates
     ? (legal | game.manualIncludedCandidates[cell]) & notExcluded
@@ -160,7 +159,7 @@ function withSnapshot(game, snapshot) {
   };
 }
 
-function runNakedSingleClosure(board, excludedMasks, sources) {
+function runNakedSingleClosure(board, excludedMasks, sources, regions) {
   const filled = [];
   let changed = true;
 
@@ -168,7 +167,7 @@ function runNakedSingleClosure(board, excludedMasks, sources) {
     changed = false;
     for (let cell = 0; cell < CELL_COUNT; cell += 1) {
       if (board[cell] !== 0) continue;
-      const candidates = legalMaskForBoard(board, cell) & ~excludedMasks[cell];
+      const candidates = legalMaskForBoard(board, cell, regions) & ~excludedMasks[cell];
       if (candidates === 0 || (candidates & (candidates - 1)) !== 0) continue;
 
       let digit = 1;
@@ -195,6 +194,7 @@ export function createGame(puzzle, { autoFill = true } = {}) {
   if (typeof puzzle.puzzle !== "string" || !/^\d{81}$/.test(puzzle.puzzle)) {
     throw new TypeError("puzzle must be an 81-character digit string using 0 for blanks");
   }
+  const regions = getRegions(puzzle);
 
   const initialBoard = Array.from(puzzle.puzzle, Number);
   const currentBoard = [...initialBoard];
@@ -202,12 +202,13 @@ export function createGame(puzzle, { autoFill = true } = {}) {
   const manualIncludedCandidates = Array(CELL_COUNT).fill(0);
   const manualExcludedCandidates = Array(CELL_COUNT).fill(0);
   const lastAutoFilled = autoFill
-    ? runNakedSingleClosure(currentBoard, manualExcludedCandidates, sources)
+    ? runNakedSingleClosure(currentBoard, manualExcludedCandidates, sources, regions)
     : [];
 
   return {
     puzzleId: puzzle.puzzleId,
     difficulty: puzzle.difficulty,
+    ...(puzzle.mode === "jigsaw" ? { mode: "jigsaw", regions } : {}),
     initialBoard,
     currentBoard,
     manualIncludedCandidates,
@@ -234,7 +235,7 @@ function sameEditableState(left, right) {
 
 function finishTransaction(game, draft, autoFill) {
   const lastAutoFilled = autoFill
-    ? runNakedSingleClosure(draft.currentBoard, draft.manualExcludedCandidates, draft.sources)
+    ? runNakedSingleClosure(draft.currentBoard, draft.manualExcludedCandidates, draft.sources, getRegions(game))
     : [];
   if (sameEditableState(game, draft)) return game;
 
@@ -254,7 +255,7 @@ function finishTransaction(game, draft, autoFill) {
 
 /** Apply one user action and any enabled naked-single chain as one history step. */
 export function transact(game, action, { autoFill = true } = {}) {
-  assertGame(game);
+  const regions = assertGame(game);
   assertAutoFill(autoFill);
   if (!action || typeof action !== "object") throw new TypeError("action must be an object");
   if (!["set", "toggleCandidate", "delete", "clearNotes"].includes(action.type)) {
@@ -293,7 +294,7 @@ export function transact(game, action, { autoFill = true } = {}) {
     draft.sources[cell] = "";
     draft.manualIncludedCandidates[cell] = memoMask;
 
-    const legalAfterClear = legalMaskForBoard(draft.currentBoard, cell);
+    const legalAfterClear = legalMaskForBoard(draft.currentBoard, cell, regions);
     draft.manualExcludedCandidates[cell] &= ~memoMask;
     draft.manualExcludedCandidates[cell] |= legalAfterClear & ~memoMask;
     return finishTransaction(game, draft, false);
@@ -317,14 +318,14 @@ export function transact(game, action, { autoFill = true } = {}) {
   }
 
   if (action.type === "clearNotes") {
-    const legal = legalMaskForBoard(draft.currentBoard, cell);
+    const legal = legalMaskForBoard(draft.currentBoard, cell, regions);
     draft.manualIncludedCandidates[cell] = 0;
     draft.manualExcludedCandidates[cell] |= legal;
     return finishTransaction(game, draft, false);
   }
 
   const digitBit = bitFor(action.value);
-  const legal = legalMaskForBoard(draft.currentBoard, cell);
+  const legal = legalMaskForBoard(draft.currentBoard, cell, regions);
   const effectiveBefore = legal & ~draft.manualExcludedCandidates[cell];
   const visible = ((action.autoCandidates ?? true) ? legal | draft.manualIncludedCandidates[cell] : draft.manualIncludedCandidates[cell])
     & ~draft.manualExcludedCandidates[cell];
@@ -373,29 +374,11 @@ export function redo(game) {
   };
 }
 
-/** Return every cell participating in a row, column, or box duplicate. */
-export function getConflicts(board) {
+/** Return every cell participating in a row, column, or region duplicate. */
+export function getConflicts(board, regions = NORMAL_REGIONS) {
   assertBoard(board);
   const conflicts = new Set();
-  const groups = [];
-
-  for (let row = 0; row < SIDE; row += 1) {
-    groups.push(Array.from({ length: SIDE }, (_, column) => row * SIDE + column));
-  }
-  for (let column = 0; column < SIDE; column += 1) {
-    groups.push(Array.from({ length: SIDE }, (_, row) => row * SIDE + column));
-  }
-  for (let boxRow = 0; boxRow < BOX_SIDE; boxRow += 1) {
-    for (let boxColumn = 0; boxColumn < BOX_SIDE; boxColumn += 1) {
-      const group = [];
-      for (let rowOffset = 0; rowOffset < BOX_SIDE; rowOffset += 1) {
-        for (let columnOffset = 0; columnOffset < BOX_SIDE; columnOffset += 1) {
-          group.push((boxRow * BOX_SIDE + rowOffset) * SIDE + boxColumn * BOX_SIDE + columnOffset);
-        }
-      }
-      groups.push(group);
-    }
-  }
+  const groups = getUnits(regions);
 
   for (const group of groups) {
     const cellsByDigit = new Map();
@@ -415,8 +398,8 @@ export function getConflicts(board) {
 
 /** A complete board must be full and free of Sudoku conflicts. */
 export function isComplete(game) {
-  assertGame(game);
+  const regions = assertGame(game);
   return game.currentBoard.every((value) => value !== 0)
     && game.initialBoard.every((value, cell) => value === 0 || game.currentBoard[cell] === value)
-    && getConflicts(game.currentBoard).length === 0;
+    && getConflicts(game.currentBoard, regions).length === 0;
 }

@@ -9,6 +9,7 @@ import {
 } from './score-profiles.js';
 
 import { DEFAULT_SETTINGS, getProfileSettings, normalizeSettingsProfiles } from './settings-profiles.js';
+import { NORMAL_REGIONS, isValidRegions } from '../game/regions.js';
 
 export { DEFAULT_SETTINGS };
 export { emptyStats, recordClear };
@@ -68,6 +69,10 @@ function validArray(value, max) {
 export function validateGame(game) {
   if (game === null) return true;
   if (!game || typeof game.puzzleId !== 'string' || !DIFFICULTIES.includes(game.difficulty)) return false;
+  if (game.mode !== undefined && !['normal', 'jigsaw'].includes(game.mode)) return false;
+  if (game.mode === 'jigsaw') {
+    if (!game.puzzleId.startsWith('jigsaw_') || !isValidRegions(game.regions)) return false;
+  } else if (game.puzzleId.startsWith('jigsaw_') || (game.regions !== undefined && game.regions !== NORMAL_REGIONS)) return false;
   if (game.hintsUsed !== undefined && (!Number.isInteger(game.hintsUsed) || game.hintsUsed < 0 || game.hintsUsed > 5)) return false;
   if (game.lastHint !== undefined && game.lastHint !== null) {
     const hint = game.lastHint;
@@ -80,6 +85,20 @@ export function validateGame(game) {
   return validArray(game.initialBoard, 9) && validSnapshot(game) && Number.isFinite(game.elapsedTime) && game.elapsedTime >= 0 && typeof game.startedAt === 'string' && Array.isArray(game.undoStack) && Array.isArray(game.redoStack) && game.undoStack.length <= 100 && game.redoStack.length <= 100 && game.undoStack.every(validSnapshot) && game.redoStack.every(validSnapshot);
 }
 
+function currentGamesFor(app) {
+  const slots = { normal: null, jigsaw: null, ...app.currentGames };
+  if (Object.keys(slots).some(mode => !['normal', 'jigsaw'].includes(mode))) throw new Error('途中データのモードが不正です。');
+  for (const mode of ['normal', 'jigsaw']) {
+    const game = slots[mode];
+    if (!validateGame(game) || (game && (game.mode || 'normal') !== mode)) throw new Error('途中データを読み込めませんでした。保存データは保持されています。');
+  }
+  if (app.currentGame !== null && app.currentGame !== undefined) {
+    if (!validateGame(app.currentGame)) throw new Error('保存する盤面が不正です。');
+    slots[app.currentGame.mode || 'normal'] = app.currentGame;
+  }
+  return slots;
+}
+
 export async function loadApp() {
   const saved = await readValue('app');
   if (!saved) {
@@ -87,6 +106,7 @@ export async function loadApp() {
     const settingsProfiles = normalizeSettingsProfiles(null);
     return {
       currentGame: null,
+      currentGames: { normal: null, jigsaw: null },
       stats: scoreProfiles.guest,
       scoreProfiles,
       settingsProfiles,
@@ -94,11 +114,13 @@ export async function loadApp() {
     };
   }
   if (!validateGame(saved.currentGame)) throw new Error('途中データを読み込めませんでした。保存データは保持されています。');
+  const currentGames = currentGamesFor(saved);
   const legacyStats = normalizeStats(saved.stats || emptyStats());
   const scoreProfiles = normalizeScoreProfiles(saved.scoreProfiles, legacyStats);
   const settingsProfiles = normalizeSettingsProfiles(saved.settingsProfiles, saved.settings, scoreProfiles.activeKey);
   return {
     currentGame: saved.currentGame,
+    currentGames,
     stats: getProfileStats(scoreProfiles),
     scoreProfiles,
     settingsProfiles,
@@ -108,6 +130,8 @@ export async function loadApp() {
 
 export function saveApp(app) {
   if (!validateGame(app.currentGame)) return Promise.reject(new Error('保存する盤面が不正です。'));
+  let currentGames;
+  try { currentGames = currentGamesFor(app); } catch (error) { return Promise.reject(error); }
   const profileSource = app.scoreProfiles;
   let scoreProfiles = normalizeScoreProfiles(profileSource, app.stats || emptyStats());
   const activeKey = profileSource?.activeKey || 'guest';
@@ -118,6 +142,7 @@ export function saveApp(app) {
   const settingsProfiles = normalizeSettingsProfiles(app.settingsProfiles, app.settings, activeKey);
   return writeValue('app', {
     ...app,
+    currentGames,
     stats: scoreProfiles.guest,
     scoreProfiles,
     settingsProfiles,
