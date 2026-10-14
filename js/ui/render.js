@@ -106,6 +106,10 @@ function gameView(state, difficultyList, { displayed, conflicts, elapsed, isComp
     const includedMask = game.manualIncludedCandidates[index] || 0;
     const classes = ['cell', isGiven ? 'given' : 'editable'];
     if (row === selectedRow || col === selectedCol || regions[index] === selectedRegion) classes.push('related');
+    if (game.mode === 'jigsaw') {
+      if (row === selectedRow || col === selectedCol) classes.push('line-related');
+      if (regions[index] === selectedRegion) classes.push('region-related');
+    }
     if (col < 8 && regions[index] !== regions[index + 1]) classes.push('region-right');
     if (row < 8 && regions[index] !== regions[index + 9]) classes.push('region-bottom');
     if (selectedValue && value === selectedValue) classes.push('same-number');

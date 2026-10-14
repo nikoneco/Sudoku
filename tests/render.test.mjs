@@ -251,3 +251,33 @@ test('jigsaw boundaries, related cells, conflicts and displayed notes follow the
     assert.equal((root.innerHTML.match(/role="gridcell"/g) || []).length, 81);
   }
 });
+
+test('jigsaw highlights exactly nine region cells above its row and column while normal highlighting stays uniform', () => {
+  const regions = [...NORMAL_REGIONS];
+  [regions[2], regions[12]] = [regions[12], regions[2]];
+  const root = { scrollTop: 0, querySelector: () => null };
+  const helpers = { isComplete, displayed: getDisplayedCandidates, conflicts: getConflicts, elapsed: 0, pad: getKeypadState };
+  for (const mode of GAME_MODES) {
+    const game = createGame({ puzzleId: 'highlight_regions', difficulty: '初級', puzzle: '0'.repeat(81),
+      ...(mode.id === 'jigsaw' ? { mode: 'jigsaw', regions: regions.join('') } : {}) }, { autoFill: false });
+    const original = JSON.stringify(game);
+    for (const selectedCell of [0, 2, 12, 40, 80]) {
+      for (const inputMode of ['number', 'memo']) {
+        renderApp(root, { view: 'game', currentGame: game, selectedCell, inputMode, settings: {} }, [], helpers);
+        const cells = [...root.innerHTML.matchAll(/<button class="(cell[^"]*)"[^>]*data-cell="(\d+)"/g)]
+          .map(match => ({ classes: new Set(match[1].split(' ')), index: Number(match[2]) }));
+        assert.equal(cells.length, 81);
+        assert.equal(cells.filter(cell => cell.classes.has('region-related')).length, mode.id === 'jigsaw' ? 9 : 0);
+        for (const { classes, index } of cells) {
+          const inLine = Math.floor(index / 9) === Math.floor(selectedCell / 9) || index % 9 === selectedCell % 9;
+          const inRegion = (mode.id === 'jigsaw' ? regions : NORMAL_REGIONS)[index] === (mode.id === 'jigsaw' ? regions : NORMAL_REGIONS)[selectedCell];
+          assert.equal(classes.has('related'), inLine || inRegion);
+          assert.equal(classes.has('line-related'), mode.id === 'jigsaw' && inLine);
+          assert.equal(classes.has('region-related'), mode.id === 'jigsaw' && inRegion);
+          assert.equal(classes.has('selected'), index === selectedCell);
+        }
+      }
+    }
+    assert.equal(JSON.stringify(game), original);
+  }
+});

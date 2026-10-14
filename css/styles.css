@@ -521,15 +521,10 @@ button:focus-visible {
 
 .cell:nth-child(9n) { border-right: 0; }
 .cell:nth-child(n + 73) { border-bottom: 0; }
-.cell:nth-child(3n) { border-right-width: 1px; }
-.cell:nth-child(3n + 1) { border-left: 0; }
-.cell:nth-child(3n) { border-right-color: var(--ink); }
-.cell:nth-child(n + 19):nth-child(-n + 27),
-.cell:nth-child(n + 46):nth-child(-n + 54) { border-bottom-color: var(--ink); }
-.cell:nth-child(n + 19):nth-child(-n + 27),
-.cell:nth-child(n + 46):nth-child(-n + 54) { border-bottom-width: 2px; }
-.cell:nth-child(3n) { border-right-width: 1px; }
-.cell:nth-child(3n + 1) { border-left: 0; }
+.board:not(.board--jigsaw) .cell:nth-child(3n) { border-right-width: 1px; border-right-color: var(--ink); }
+.board:not(.board--jigsaw) .cell:nth-child(3n + 1) { border-left: 0; }
+.board:not(.board--jigsaw) .cell:nth-child(n + 19):nth-child(-n + 27),
+.board:not(.board--jigsaw) .cell:nth-child(n + 46):nth-child(-n + 54) { border-bottom: 2px solid var(--ink); }
 
 .board--jigsaw .cell {
   border-right: 1px solid var(--line-strong);
@@ -550,10 +545,14 @@ button:focus-visible {
 }
 
 .cell.related { background: var(--teal-soft); }
+.cell.line-related { background: color-mix(in srgb, var(--paper), var(--teal-soft)); }
+.cell.region-related { background: var(--teal-soft); }
 .cell.same-number { background: var(--teal-soft); color: var(--teal); }
 .cell.selected { z-index: 2; background: var(--teal-mid); color: var(--ink); }
 .cell.selected::after { border: 2px solid var(--teal); }
 .memo-mode .cell.related:not(.conflict) { background: var(--memo-related-bg); }
+.memo-mode .cell.line-related:not(.conflict) { background: color-mix(in srgb, var(--paper), var(--memo-related-bg)); }
+.memo-mode .cell.region-related:not(.conflict) { background: var(--memo-related-bg); }
 .memo-mode .cell.selected:not(.conflict) { background: var(--memo-selected-bg); }
 .memo-mode .cell.selected:not(.conflict)::after { border-color: var(--orange); }
 .cell.same-number:not(.selected):not(.conflict) { background: var(--same-number-bg); color: var(--same-number-ink); }
